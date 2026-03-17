@@ -30,52 +30,216 @@ export default async function NBAPlayers() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <Link href="/nba" className="text-xs mb-1 inline-block" style={{ color: "var(--accent)" }}>← NBA</Link>
-          <h1 className="text-xl font-black text-white">Player Leaders</h1>
-        </div>
-      </div>
+      <Link
+        href="/nba"
+        className="text-[12px] font-semibold mb-3 inline-block"
+        style={{ color: "var(--accent)" }}
+      >
+        ← NBA
+      </Link>
+      <h1
+        className="text-[22px] font-extrabold mb-5"
+        style={{ color: "var(--text-bright)" }}
+      >
+        Player Leaders
+      </h1>
 
-      <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-        <div className="px-3 py-2 grid items-center" style={{ gridTemplateColumns: "28px 1fr 48px 48px 48px 48px 48px 48px", background: "rgba(255,255,255,0.03)", borderBottom: "1px solid var(--border)" }}>
-          <span className="text-xs" style={{ color: "var(--text-dim)" }}>#</span>
-          <span className="text-xs" style={{ color: "var(--text-dim)" }}>Player</span>
-          <span className="text-xs text-center" style={{ color: "var(--text-dim)" }}>GP</span>
-          <span className="text-xs text-center font-bold" style={{ color: "var(--text-dim)" }}>PTS</span>
-          <span className="text-xs text-center" style={{ color: "var(--text-dim)" }}>REB</span>
-          <span className="text-xs text-center" style={{ color: "var(--text-dim)" }}>AST</span>
-          <span className="text-xs text-center hidden sm:block" style={{ color: "var(--text-dim)" }}>FG%</span>
-          <span className="text-xs text-center hidden sm:block" style={{ color: "var(--text-dim)" }}>3P%</span>
-        </div>
-
+      {/* ── Mobile: Card Layout ── */}
+      <div className="sm:hidden space-y-2">
         {stats.map((s, i) => {
           const p = playerMap[s.player_id] || {};
           return (
-            <Link key={s.id} href={`/nba/players/${p.espn_id || s.player_id?.replace("nba_", "")}`} className="block hover:bg-white/3">
-              <div className="px-3 py-2 grid items-center" style={{ gridTemplateColumns: "28px 1fr 48px 48px 48px 48px 48px 48px", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
-                <span className="text-xs font-bold" style={{ color: i < 3 ? "var(--accent)" : i < 10 ? "var(--green)" : "var(--text-dim)" }}>{i + 1}</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  {p.headshot_url && <img src={p.headshot_url} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />}
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white truncate">{p.name || "?"}</div>
-                    <div className="text-xs" style={{ color: "var(--text-dim)" }}>{p.position}</div>
+            <Link
+              key={s.id}
+              href={`/nba/players/${p.espn_id || s.player_id?.replace("nba_", "")}`}
+              className="block rounded-2xl p-3 card-hover"
+              style={{
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <span
+                  className="stat-num text-[11px] w-5 text-center font-bold flex-shrink-0"
+                  style={{
+                    color:
+                      i < 3
+                        ? "var(--accent)"
+                        : i < 10
+                          ? "var(--green)"
+                          : "var(--text-dim)",
+                  }}
+                >
+                  {i + 1}
+                </span>
+                {p.headshot_url ? (
+                  <img
+                    src={p.headshot_url}
+                    alt=""
+                    className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+                    style={{ background: "var(--bg-surface)" }}
+                  />
+                ) : (
+                  <div
+                    className="w-10 h-10 rounded-full flex-shrink-0"
+                    style={{ background: "var(--bg-surface)" }}
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div
+                    className="text-[14px] font-semibold truncate"
+                    style={{ color: "var(--text-bright)" }}
+                  >
+                    {p.name || "?"}
+                  </div>
+                  <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+                    {p.position} · {s.games_played} GP
                   </div>
                 </div>
-                <span className="text-xs text-center">{s.games_played}</span>
-                <span className="text-sm text-center font-bold text-white">{fmt(s.points_per_game, 1)}</span>
-                <span className="text-xs text-center">{fmt(s.rebounds_per_game, 1)}</span>
-                <span className="text-xs text-center">{fmt(s.assists_per_game, 1)}</span>
-                <span className="text-xs text-center hidden sm:block">{fmt(s.fg_pct, 1)}</span>
-                <span className="text-xs text-center hidden sm:block">{fmt(s.fg3_pct, 1)}</span>
+                <div className="text-right flex-shrink-0">
+                  <div
+                    className="stat-num text-[18px]"
+                    style={{ color: "var(--text-bright)" }}
+                  >
+                    {fmt(s.points_per_game, 1)}
+                  </div>
+                  <div
+                    className="text-[10px] font-semibold"
+                    style={{ color: "var(--text-dim)" }}
+                  >
+                    PPG
+                  </div>
+                </div>
+              </div>
+
+              {/* Mini stat row */}
+              <div
+                className="flex justify-between mt-2.5 pt-2.5"
+                style={{ borderTop: "1px solid var(--border)" }}
+              >
+                {[
+                  { label: "REB", val: s.rebounds_per_game },
+                  { label: "AST", val: s.assists_per_game },
+                  { label: "FG%", val: s.fg_pct },
+                  { label: "3P%", val: s.fg3_pct },
+                ].map((stat) => (
+                  <div key={stat.label} className="text-center">
+                    <div className="stat-num text-[12px]" style={{ color: "var(--text)" }}>
+                      {fmt(stat.val, 1)}
+                    </div>
+                    <div className="text-[9px] font-semibold" style={{ color: "var(--text-dim)" }}>
+                      {stat.label}
+                    </div>
+                  </div>
+                ))}
               </div>
             </Link>
           );
         })}
       </div>
 
+      {/* ── Desktop: Table Layout ── */}
+      <div
+        className="hidden sm:block rounded-2xl overflow-hidden"
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        {/* Header row */}
+        <div
+          className="flex items-center px-3 py-2"
+          style={{
+            background: "rgba(255,255,255,0.02)",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          <span className="text-[10px] font-semibold w-7" style={{ color: "var(--text-dim)" }}>#</span>
+          <span className="text-[10px] font-semibold flex-1" style={{ color: "var(--text-dim)" }}>Player</span>
+          {["GP", "PTS", "REB", "AST", "FG%", "3P%"].map((h) => (
+            <span
+              key={h}
+              className="text-[10px] font-semibold w-12 text-center"
+              style={{ color: "var(--text-dim)" }}
+            >
+              {h}
+            </span>
+          ))}
+        </div>
+
+        {stats.map((s, i) => {
+          const p = playerMap[s.player_id] || {};
+          return (
+            <Link
+              key={s.id}
+              href={`/nba/players/${p.espn_id || s.player_id?.replace("nba_", "")}`}
+              className="flex items-center px-3 py-2 card-hover"
+              style={{ borderBottom: "1px solid var(--border)" }}
+            >
+              <span
+                className="stat-num text-[11px] w-7 font-bold"
+                style={{
+                  color:
+                    i < 3
+                      ? "var(--accent)"
+                      : i < 10
+                        ? "var(--green)"
+                        : "var(--text-dim)",
+                }}
+              >
+                {i + 1}
+              </span>
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                {p.headshot_url ? (
+                  <img
+                    src={p.headshot_url}
+                    alt=""
+                    className="w-7 h-7 rounded-full object-cover flex-shrink-0"
+                    style={{ background: "var(--bg-surface)" }}
+                  />
+                ) : (
+                  <div
+                    className="w-7 h-7 rounded-full flex-shrink-0"
+                    style={{ background: "var(--bg-surface)" }}
+                  />
+                )}
+                <div className="min-w-0">
+                  <div
+                    className="text-[13px] font-semibold truncate"
+                    style={{ color: "var(--text-bright)" }}
+                  >
+                    {p.name || "?"}
+                  </div>
+                  <div className="text-[10px]" style={{ color: "var(--text-dim)" }}>
+                    {p.position}
+                  </div>
+                </div>
+              </div>
+              <span className="stat-num text-[12px] w-12 text-center" style={{ color: "var(--text-dim)" }}>
+                {s.games_played}
+              </span>
+              <span className="stat-num text-[13px] w-12 text-center font-bold" style={{ color: "var(--text-bright)" }}>
+                {fmt(s.points_per_game, 1)}
+              </span>
+              <span className="stat-num text-[12px] w-12 text-center">
+                {fmt(s.rebounds_per_game, 1)}
+              </span>
+              <span className="stat-num text-[12px] w-12 text-center">
+                {fmt(s.assists_per_game, 1)}
+              </span>
+              <span className="stat-num text-[12px] w-12 text-center">
+                {fmt(s.fg_pct, 1)}
+              </span>
+              <span className="stat-num text-[12px] w-12 text-center">
+                {fmt(s.fg3_pct, 1)}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+
       {stats.length === 0 && (
-        <div className="text-center py-12 opacity-40">
+        <div className="text-center py-16" style={{ color: "var(--text-dim)" }}>
           <p>No player stats yet. Run the sync script.</p>
         </div>
       )}
