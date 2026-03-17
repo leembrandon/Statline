@@ -5,7 +5,6 @@ import { fmt, formatTime, formatDate } from "@/lib/utils";
 export const revalidate = 300;
 
 async function getData() {
-  // Pull everything — sport-agnostic. Only NBA has data now, but NFL/MLB will flow in later.
   const [games, standings, scoringLeaders, assistLeaders, reboundLeaders] =
     await Promise.all([
       query("games", {
@@ -29,7 +28,6 @@ async function getData() {
       }),
     ]);
 
-  // Gather unique IDs
   const allPlayerIds = [
     ...new Set([
       ...scoringLeaders.map((l) => l.player_id),
@@ -46,22 +44,15 @@ async function getData() {
     ]),
   ].filter(Boolean);
 
-  // Batch fetch teams and players
   let teams = [];
   if (allTeamIds.length > 0) {
-    const { data } = await supabase
-      .from("teams")
-      .select("*")
-      .in("id", allTeamIds);
+    const { data } = await supabase.from("teams").select("*").in("id", allTeamIds);
     teams = data || [];
   }
 
   let players = [];
   if (allPlayerIds.length > 0) {
-    const { data } = await supabase
-      .from("players")
-      .select("*")
-      .in("id", allPlayerIds);
+    const { data } = await supabase.from("players").select("*").in("id", allPlayerIds);
     players = data || [];
   }
 
@@ -70,18 +61,10 @@ async function getData() {
   const playerMap = {};
   players.forEach((p) => (playerMap[p.id] = p));
 
-  return {
-    games,
-    standings,
-    scoringLeaders,
-    assistLeaders,
-    reboundLeaders,
-    teamMap,
-    playerMap,
-  };
+  return { games, standings, scoringLeaders, assistLeaders, reboundLeaders, teamMap, playerMap };
 }
 
-/* ─── Score Card (inside horizontal strip) ─── */
+/* ─── Score Card ─── */
 function ScoreCard({ game, teamMap }) {
   const isFinal = game.status === "final";
   const isLive = game.status === "in_progress";
@@ -91,111 +74,56 @@ function ScoreCard({ game, teamMap }) {
   const homeWon = isFinal && game.home_score > game.away_score;
   const awayWon = isFinal && game.away_score > game.home_score;
 
-  // Don't show cards with 0-0 scheduled games that look weird
-  const showScores = !isScheduled;
-
   return (
     <div
-      className="flex-shrink-0 w-[168px] rounded-2xl p-3 card-hover"
+      className="flex-shrink-0 w-[172px] lg:w-auto lg:flex-shrink rounded-2xl p-3 card-hover"
       style={{
         background: "var(--bg-card)",
-        border: "1px solid var(--border)",
+        border: `1px solid ${isLive ? "rgba(255,92,92,0.2)" : "var(--border)"}`,
       }}
     >
-      {/* Status bar */}
       <div className="flex items-center justify-between mb-2.5">
         {isLive ? (
           <div className="flex items-center gap-1.5">
-            <span
-              className="live-dot w-1.5 h-1.5 rounded-full inline-block"
-              style={{ background: "var(--red)" }}
-            />
-            <span className="text-[10px] font-bold uppercase" style={{ color: "var(--red)" }}>
-              Live
-            </span>
+            <span className="live-dot w-1.5 h-1.5 rounded-full inline-block" style={{ background: "var(--red)" }} />
+            <span className="text-[10px] font-bold uppercase" style={{ color: "var(--red)" }}>Live</span>
           </div>
         ) : isFinal ? (
-          <span className="text-[10px] font-semibold uppercase" style={{ color: "var(--text-dim)" }}>
-            Final
-          </span>
+          <span className="text-[10px] font-semibold uppercase" style={{ color: "var(--text-dim)" }}>Final</span>
         ) : (
-          <span className="text-[10px] font-semibold" style={{ color: "var(--text-dim)" }}>
-            {formatTime(game.start_time)}
-          </span>
+          <span className="text-[10px] font-semibold" style={{ color: "var(--text-dim)" }}>{formatTime(game.start_time)}</span>
         )}
-        <span
-          className="text-[10px] font-medium"
-          style={{ color: "var(--text-dim)" }}
-        >
-          {formatDate(game.start_time)}
-        </span>
+        <span className="text-[10px]" style={{ color: "var(--text-dim)" }}>{formatDate(game.start_time)}</span>
       </div>
 
-      {/* Away team */}
-      <div className="flex items-center justify-between mb-1.5">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          {awayTeam.logo_url ? (
-            <img
-              src={awayTeam.logo_url}
-              alt=""
-              className="w-5 h-5 flex-shrink-0"
-            />
-          ) : (
-            <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: "var(--bg-surface)" }} />
+      {[
+        { team: awayTeam, score: game.away_score, won: awayWon },
+        { team: homeTeam, score: game.home_score, won: homeWon },
+      ].map(({ team, score, won }, idx) => (
+        <div key={idx} className={`flex items-center justify-between ${idx === 0 ? "mb-1.5" : ""}`}>
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {team.logo_url ? (
+              <img src={team.logo_url} alt="" className="w-5 h-5 flex-shrink-0" />
+            ) : (
+              <div className="w-5 h-5 rounded bg-white/5 flex-shrink-0" />
+            )}
+            <span
+              className="text-[13px] font-bold truncate"
+              style={{ color: won ? "var(--text-bright)" : isFinal ? "var(--text-dim)" : "var(--text-bright)" }}
+            >
+              {team.abbreviation || "TBD"}
+            </span>
+          </div>
+          {!isScheduled && (
+            <span
+              className="stat-num text-[15px]"
+              style={{ color: won ? "var(--text-bright)" : isFinal ? "var(--text-dim)" : "var(--text-bright)" }}
+            >
+              {score}
+            </span>
           )}
-          <span
-            className="text-[13px] font-bold truncate"
-            style={{
-              color: awayWon ? "var(--text-bright)" : isFinal ? "var(--text-dim)" : "var(--text-bright)",
-            }}
-          >
-            {awayTeam.abbreviation || "TBD"}
-          </span>
         </div>
-        {showScores && (
-          <span
-            className="stat-num text-[15px]"
-            style={{
-              color: awayWon ? "var(--text-bright)" : isFinal ? "var(--text-dim)" : "var(--text-bright)",
-            }}
-          >
-            {game.away_score}
-          </span>
-        )}
-      </div>
-
-      {/* Home team */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          {homeTeam.logo_url ? (
-            <img
-              src={homeTeam.logo_url}
-              alt=""
-              className="w-5 h-5 flex-shrink-0"
-            />
-          ) : (
-            <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: "var(--bg-surface)" }} />
-          )}
-          <span
-            className="text-[13px] font-bold truncate"
-            style={{
-              color: homeWon ? "var(--text-bright)" : isFinal ? "var(--text-dim)" : "var(--text-bright)",
-            }}
-          >
-            {homeTeam.abbreviation || "TBD"}
-          </span>
-        </div>
-        {showScores && (
-          <span
-            className="stat-num text-[15px]"
-            style={{
-              color: homeWon ? "var(--text-bright)" : isFinal ? "var(--text-dim)" : "var(--text-bright)",
-            }}
-          >
-            {game.home_score}
-          </span>
-        )}
-      </div>
+      ))}
     </div>
   );
 }
@@ -204,15 +132,9 @@ function ScoreCard({ game, teamMap }) {
 function SectionHeader({ title, href, linkText }) {
   return (
     <div className="flex items-center justify-between mb-3">
-      <h2 className="text-[15px] font-bold" style={{ color: "var(--text-bright)" }}>
-        {title}
-      </h2>
+      <h2 className="text-[16px] font-bold" style={{ color: "var(--text-bright)" }}>{title}</h2>
       {href && (
-        <Link
-          href={href}
-          className="text-[12px] font-semibold"
-          style={{ color: "var(--accent)" }}
-        >
+        <Link href={href} className="text-[12px] font-semibold hover:underline" style={{ color: "var(--accent)" }}>
           {linkText || "See all"} →
         </Link>
       )}
@@ -220,344 +142,221 @@ function SectionHeader({ title, href, linkText }) {
   );
 }
 
-/* ─── Compact Standings Row ─── */
-function StandingsRow({ standing, team, rank }) {
-  return (
-    <div
-      className="flex items-center gap-2 px-3 py-2"
-      style={{ borderBottom: "1px solid var(--border)" }}
-    >
-      <span
-        className="stat-num text-[11px] w-5 text-center font-bold"
-        style={{
-          color:
-            rank <= 6 ? "var(--accent)" : rank <= 10 ? "var(--green)" : "var(--text-dim)",
-        }}
-      >
-        {rank}
-      </span>
-      {team.logo_url && (
-        <img src={team.logo_url} alt="" className="w-4 h-4 flex-shrink-0" />
-      )}
-      <span
-        className="text-[12px] font-semibold flex-1 truncate"
-        style={{ color: "var(--text-bright)" }}
-      >
-        {team.abbreviation || "?"}
-      </span>
-      <span className="stat-num text-[12px] w-8 text-center" style={{ color: "var(--text-bright)" }}>
-        {standing.wins}
-      </span>
-      <span className="stat-num text-[12px] w-8 text-center" style={{ color: "var(--text-dim)" }}>
-        {standing.losses}
-      </span>
-      <span
-        className="stat-num text-[12px] w-10 text-right"
-        style={{
-          color:
-            standing.pct >= 0.6
-              ? "var(--green)"
-              : standing.pct < 0.4
-                ? "var(--red)"
-                : "var(--text)",
-        }}
-      >
-        {fmt(standing.pct, 3)}
-      </span>
-    </div>
-  );
-}
-
-/* ─── Leader Card (mobile-friendly) ─── */
-function LeaderCard({ stat, player, rank, statKey, statLabel }) {
-  const team = player?.team_id?.replace("nba_", "") || "";
-
+/* ─── Leader Row ─── */
+function LeaderRow({ stat, player, rank, statKey, statLabel }) {
   return (
     <Link
       href={`/nba/players/${player?.espn_id || stat.player_id?.replace("nba_", "")}`}
       className="flex items-center gap-3 px-3 py-2.5 card-hover"
-      style={{
-        borderBottom: "1px solid var(--border)",
-        background: "transparent",
-      }}
+      style={{ borderBottom: "1px solid var(--border)" }}
     >
       <span
-        className="stat-num text-[11px] w-5 text-center font-bold"
-        style={{
-          color: rank <= 3 ? "var(--accent)" : "var(--text-dim)",
-        }}
+        className="stat-num text-[11px] w-5 text-center font-bold flex-shrink-0"
+        style={{ color: rank <= 3 ? "var(--accent)" : "var(--text-dim)" }}
       >
         {rank}
       </span>
       {player?.headshot_url ? (
-        <img
-          src={player.headshot_url}
-          alt=""
-          className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-          style={{ background: "var(--bg-surface)" }}
-        />
+        <img src={player.headshot_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" style={{ background: "var(--bg-surface)" }} />
       ) : (
-        <div
-          className="w-8 h-8 rounded-full flex-shrink-0"
-          style={{ background: "var(--bg-surface)" }}
-        />
+        <div className="w-8 h-8 rounded-full flex-shrink-0" style={{ background: "var(--bg-surface)" }} />
       )}
       <div className="flex-1 min-w-0">
-        <div
-          className="text-[13px] font-semibold truncate"
-          style={{ color: "var(--text-bright)" }}
-        >
+        <div className="text-[13px] font-semibold truncate" style={{ color: "var(--text-bright)" }}>
           {player?.name || "Unknown"}
         </div>
         <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>
-          {player?.position}
-          {team ? ` · ${team.toUpperCase()}` : ""}
+          {player?.position}{player?.team_id ? ` · ${player.team_id.replace("nba_", "").toUpperCase()}` : ""}
         </div>
       </div>
-      <div className="text-right">
-        <div
-          className="stat-num text-[16px]"
-          style={{ color: "var(--text-bright)" }}
-        >
-          {fmt(stat[statKey], 1)}
-        </div>
-        <div className="text-[10px] font-semibold" style={{ color: "var(--text-dim)" }}>
-          {statLabel}
-        </div>
+      <div className="text-right flex-shrink-0">
+        <div className="stat-num text-[16px]" style={{ color: "var(--text-bright)" }}>{fmt(stat[statKey], 1)}</div>
+        <div className="text-[10px] font-semibold" style={{ color: "var(--text-dim)" }}>{statLabel}</div>
       </div>
     </Link>
   );
 }
 
-/* ═══════════════════════════════════════════════ */
-/*                   HOME PAGE                     */
-/* ═══════════════════════════════════════════════ */
-
+/* ═══════════════ HOME PAGE ═══════════════ */
 export default async function Home() {
   let data = {
-    games: [],
-    standings: [],
-    scoringLeaders: [],
-    assistLeaders: [],
-    reboundLeaders: [],
-    teamMap: {},
-    playerMap: {},
+    games: [], standings: [], scoringLeaders: [], assistLeaders: [], reboundLeaders: [], teamMap: {}, playerMap: {},
   };
-
   try {
     data = await getData();
   } catch (e) {
     console.error("Homepage data error:", e);
   }
 
-  const {
-    games,
-    standings,
-    scoringLeaders,
-    assistLeaders,
-    reboundLeaders,
-    teamMap,
-    playerMap,
-  } = data;
+  const { games, standings, scoringLeaders, assistLeaders, reboundLeaders, teamMap, playerMap } = data;
 
-  // Split games: final/live first, then scheduled
-  const finishedOrLive = games.filter(
-    (g) => g.status === "final" || g.status === "in_progress"
-  );
+  const finishedOrLive = games.filter((g) => g.status === "final" || g.status === "in_progress");
   const scheduled = games.filter((g) => g.status === "scheduled");
   const displayGames = [...finishedOrLive, ...scheduled];
 
-  // Split standings by conference
-  const east = standings
-    .filter((s) => {
-      const t = teamMap[s.team_id];
-      return t?.conference?.toLowerCase().includes("east");
-    })
-    .slice(0, 8);
-  const west = standings
-    .filter((s) => {
-      const t = teamMap[s.team_id];
-      return t?.conference?.toLowerCase().includes("west");
-    })
-    .slice(0, 8);
+  const east = standings.filter((s) => teamMap[s.team_id]?.conference?.toLowerCase().includes("east"));
+  const west = standings.filter((s) => teamMap[s.team_id]?.conference?.toLowerCase().includes("west"));
 
-  const hasData =
-    games.length > 0 || standings.length > 0 || scoringLeaders.length > 0;
+  const hasData = games.length > 0 || standings.length > 0 || scoringLeaders.length > 0;
 
   return (
     <div>
-      {/* ── Hero ── */}
+      {/* Hero */}
       <div className="mb-5">
-        <h1
-          className="text-[22px] font-extrabold tracking-tight"
-          style={{ color: "var(--text-bright)" }}
-        >
+        <h1 className="text-[24px] sm:text-[28px] font-extrabold tracking-tight" style={{ color: "var(--text-bright)" }}>
           Today in Sports
         </h1>
-        <p className="text-[13px] mt-0.5" style={{ color: "var(--text-dim)" }}>
+        <p className="text-[13px] sm:text-[14px] mt-0.5" style={{ color: "var(--text-dim)" }}>
           Scores, standings &amp; stats — all in one place.
         </p>
       </div>
 
       {!hasData && (
-        <div
-          className="text-center py-16 rounded-2xl"
-          style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}
-        >
-          <p
-            className="text-base mb-2"
-            style={{ color: "var(--text-bright)" }}
-          >
-            No data yet
-          </p>
+        <div className="text-center py-16 rounded-2xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
+          <p className="text-base mb-2" style={{ color: "var(--text-bright)" }}>No data yet</p>
           <p className="text-[13px]" style={{ color: "var(--text-dim)" }}>
-            Run{" "}
-            <code
-              className="px-2 py-0.5 rounded-md text-[12px]"
-              style={{ background: "var(--bg-surface)", color: "var(--accent)" }}
-            >
-              python sync_nba.py
-            </code>{" "}
-            to pull NBA data.
+            Run <code className="px-2 py-0.5 rounded-md text-[12px]" style={{ background: "var(--bg-surface)", color: "var(--accent)" }}>python sync_nba.py</code> to pull NBA data.
           </p>
         </div>
       )}
 
-      {/* ── Scores Strip ── */}
+      {/* ── Scores ── */}
       {displayGames.length > 0 && (
-        <section className="mb-7">
+        <section className="mb-8">
           <SectionHeader title="Scores" />
-          <div className="scroll-strip -mx-4 px-4">
+          {/* Mobile: horizontal scroll */}
+          <div className="lg:hidden scroll-strip -mx-4 px-4">
             <div className="flex gap-2.5 pb-1" style={{ width: "max-content" }}>
               {displayGames.slice(0, 12).map((g) => (
                 <ScoreCard key={g.id} game={g} teamMap={teamMap} />
               ))}
             </div>
           </div>
+          {/* Desktop: wrap grid */}
+          <div className="hidden lg:grid grid-cols-4 xl:grid-cols-5 gap-2.5">
+            {displayGames.slice(0, 10).map((g) => (
+              <ScoreCard key={g.id} game={g} teamMap={teamMap} />
+            ))}
+          </div>
         </section>
       )}
 
-      {/* ── Standings Snapshot ── */}
+      {/* ── Standings ── */}
       {standings.length > 0 && (
-        <section className="mb-7">
-          <SectionHeader
-            title="Standings"
-            href="/nba/standings"
-            linkText="Full standings"
-          />
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <section className="mb-8">
+          <SectionHeader title="Standings" href="/nba/standings" linkText="Full standings" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {[
-              { label: "East", data: east },
-              { label: "West", data: west },
+              { label: "Eastern Conference", data: east },
+              { label: "Western Conference", data: west },
             ].map(({ label, data: conf }) => (
               <div
                 key={label}
                 className="rounded-2xl overflow-hidden"
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border)",
-                }}
+                style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}
               >
-                {/* Conference header */}
-                <div
-                  className="flex items-center justify-between px-3 py-2"
-                  style={{
-                    background: "rgba(255,255,255,0.02)",
-                    borderBottom: "1px solid var(--border)",
-                  }}
-                >
-                  <span
-                    className="text-[11px] font-bold uppercase tracking-wider"
-                    style={{ color: "var(--text-dim)" }}
-                  >
-                    {label}
-                  </span>
-                  <div className="flex gap-3">
-                    <span className="text-[10px] font-semibold w-8 text-center" style={{ color: "var(--text-dim)" }}>
-                      W
-                    </span>
-                    <span className="text-[10px] font-semibold w-8 text-center" style={{ color: "var(--text-dim)" }}>
-                      L
-                    </span>
-                    <span className="text-[10px] font-semibold w-10 text-right" style={{ color: "var(--text-dim)" }}>
-                      PCT
-                    </span>
+                {/* Header */}
+                <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid var(--border)" }}>
+                  <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>{label}</span>
+                  <div className="flex">
+                    <span className="text-[10px] font-semibold w-9 text-center" style={{ color: "var(--text-dim)" }}>W</span>
+                    <span className="text-[10px] font-semibold w-9 text-center" style={{ color: "var(--text-dim)" }}>L</span>
+                    <span className="text-[10px] font-semibold w-12 text-center" style={{ color: "var(--text-dim)" }}>PCT</span>
+                    <span className="text-[10px] font-semibold w-10 text-center hidden sm:block" style={{ color: "var(--text-dim)" }}>GB</span>
+                    <span className="text-[10px] font-semibold w-10 text-center hidden lg:block" style={{ color: "var(--text-dim)" }}>STRK</span>
+                    <span className="text-[10px] font-semibold w-12 text-center hidden lg:block" style={{ color: "var(--text-dim)" }}>L10</span>
                   </div>
                 </div>
 
-                {conf.map((s, i) => {
+                {/* Rows — show top 8 on homepage */}
+                {conf.slice(0, 8).map((s, i) => {
                   const t = teamMap[s.team_id] || {};
+                  const rank = s.conference_rank || i + 1;
                   return (
-                    <StandingsRow
+                    <div
                       key={s.id}
-                      standing={s}
-                      team={t}
-                      rank={s.conference_rank || i + 1}
-                    />
+                      className="flex items-center px-3 py-2"
+                      style={{ borderBottom: "1px solid var(--border)" }}
+                    >
+                      <span
+                        className="stat-num text-[11px] w-5 text-center font-bold flex-shrink-0"
+                        style={{ color: rank <= 6 ? "var(--accent)" : rank <= 10 ? "var(--green)" : "var(--text-dim)" }}
+                      >
+                        {rank}
+                      </span>
+                      <div className="flex items-center gap-2 flex-1 min-w-0 ml-2">
+                        {t.logo_url && <img src={t.logo_url} alt="" className="w-4 h-4 flex-shrink-0" />}
+                        {/* Abbreviation on mobile, full name on tablet+ */}
+                        <span className="text-[12px] font-semibold truncate sm:hidden" style={{ color: "var(--text-bright)" }}>
+                          {t.abbreviation || "?"}
+                        </span>
+                        <span className="text-[12px] font-semibold truncate hidden sm:inline" style={{ color: "var(--text-bright)" }}>
+                          {t.full_name || t.abbreviation || "?"}
+                        </span>
+                      </div>
+                      <div className="flex flex-shrink-0">
+                        <span className="stat-num text-[12px] w-9 text-center" style={{ color: "var(--text-bright)" }}>{s.wins}</span>
+                        <span className="stat-num text-[12px] w-9 text-center" style={{ color: "var(--text-dim)" }}>{s.losses}</span>
+                        <span
+                          className="stat-num text-[12px] w-12 text-center font-semibold"
+                          style={{ color: s.pct >= 0.6 ? "var(--green)" : s.pct < 0.4 ? "var(--red)" : "var(--text)" }}
+                        >
+                          {fmt(s.pct, 3)}
+                        </span>
+                        <span className="stat-num text-[11px] w-10 text-center hidden sm:block" style={{ color: "var(--text-dim)" }}>
+                          {s.games_back != null ? (s.games_back === 0 ? "—" : s.games_back) : "-"}
+                        </span>
+                        <span
+                          className="stat-num text-[11px] w-10 text-center hidden lg:block"
+                          style={{ color: s.streak?.startsWith("W") ? "var(--green)" : s.streak?.startsWith("L") ? "var(--red)" : "var(--text-dim)" }}
+                        >
+                          {s.streak || "-"}
+                        </span>
+                        <span className="stat-num text-[11px] w-12 text-center hidden lg:block" style={{ color: "var(--text-dim)" }}>
+                          {s.last_10 || "-"}
+                        </span>
+                      </div>
+                    </div>
                   );
                 })}
+
+                {/* Playoff legend */}
+                <div className="flex items-center gap-4 px-3 py-1.5" style={{ background: "rgba(255,255,255,0.01)" }}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--accent)" }} />
+                    <span className="text-[10px]" style={{ color: "var(--text-dim)" }}>Playoff</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--green)" }} />
+                    <span className="text-[10px]" style={{ color: "var(--text-dim)" }}>Play-In</span>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
         </section>
       )}
 
-      {/* ── Stat Leaders ── */}
+      {/* ── League Leaders ── */}
       {scoringLeaders.length > 0 && (
-        <section className="mb-7">
-          <SectionHeader
-            title="League Leaders"
-            href="/nba/players"
-            linkText="Full leaderboard"
-          />
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <section className="mb-8">
+          <SectionHeader title="League Leaders" href="/nba/players" linkText="Full leaderboard" />
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {[
-              {
-                title: "Points",
-                data: scoringLeaders,
-                key: "points_per_game",
-                label: "PPG",
-              },
-              {
-                title: "Assists",
-                data: assistLeaders,
-                key: "assists_per_game",
-                label: "APG",
-              },
-              {
-                title: "Rebounds",
-                data: reboundLeaders,
-                key: "rebounds_per_game",
-                label: "RPG",
-              },
+              { title: "Scoring", data: scoringLeaders, key: "points_per_game", label: "PPG" },
+              { title: "Assists", data: assistLeaders, key: "assists_per_game", label: "APG" },
+              { title: "Rebounds", data: reboundLeaders, key: "rebounds_per_game", label: "RPG" },
             ].map((cat) => (
               <div
                 key={cat.title}
                 className="rounded-2xl overflow-hidden"
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border)",
-                }}
+                style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}
               >
-                <div
-                  className="px-3 py-2"
-                  style={{
-                    background: "rgba(255,255,255,0.02)",
-                    borderBottom: "1px solid var(--border)",
-                  }}
-                >
-                  <span
-                    className="text-[11px] font-bold uppercase tracking-wider"
-                    style={{ color: "var(--text-dim)" }}
-                  >
-                    {cat.title}
-                  </span>
+                <div className="px-3 py-2" style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid var(--border)" }}>
+                  <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>{cat.title}</span>
                 </div>
-
                 {cat.data.map((s, i) => (
-                  <LeaderCard
+                  <LeaderRow
                     key={s.id}
                     stat={s}
                     player={playerMap[s.player_id]}
@@ -573,8 +372,8 @@ export default async function Home() {
       )}
 
       {/* ── Sport Quick Links ── */}
-      <section className="mb-4">
-        <div className="grid grid-cols-3 gap-2.5">
+      <section>
+        <div className="grid grid-cols-3 sm:grid-cols-3 gap-2.5">
           {[
             { sport: "NBA", icon: "🏀", href: "/nba", active: true },
             { sport: "NFL", icon: "🏈", href: "/nfl", active: false },
@@ -583,7 +382,7 @@ export default async function Home() {
             <Link
               key={s.sport}
               href={s.active ? s.href : "#"}
-              className="rounded-2xl p-4 text-center card-hover"
+              className="rounded-2xl p-4 sm:p-5 text-center card-hover"
               style={{
                 background: "var(--bg-card)",
                 border: "1px solid var(--border)",
@@ -591,14 +390,9 @@ export default async function Home() {
                 pointerEvents: s.active ? "auto" : "none",
               }}
             >
-              <div className="text-2xl mb-1">{s.icon}</div>
-              <div
-                className="text-[13px] font-bold"
-                style={{ color: "var(--text-bright)" }}
-              >
-                {s.sport}
-              </div>
-              <div className="text-[10px] mt-0.5" style={{ color: "var(--text-dim)" }}>
+              <div className="text-2xl sm:text-3xl mb-1">{s.icon}</div>
+              <div className="text-[14px] font-bold" style={{ color: "var(--text-bright)" }}>{s.sport}</div>
+              <div className="text-[11px] mt-0.5" style={{ color: "var(--text-dim)" }}>
                 {s.active ? "Live" : "Coming soon"}
               </div>
             </Link>

@@ -1,5 +1,6 @@
 import "./globals.css";
 import Link from "next/link";
+import PlayerSearch from "@/components/PlayerSearch";
 
 export const metadata = {
   title: "StatLine — Sports Stats Hub",
@@ -16,8 +17,9 @@ function TopNav() {
         borderColor: "var(--border)",
       }}
     >
-      <div className="max-w-3xl mx-auto px-4 h-13 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2.5">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-4">
+        {/* Logo */}
+        <Link href="/" className="flex items-center gap-2.5 flex-shrink-0">
           <div
             className="w-7 h-7 rounded-lg flex items-center justify-center font-extrabold text-xs text-white"
             style={{ background: "var(--accent)" }}
@@ -25,15 +27,15 @@ function TopNav() {
             S
           </div>
           <span
-            className="text-[15px] font-bold tracking-tight"
+            className="text-[15px] font-bold tracking-tight hidden sm:inline"
             style={{ color: "var(--text-bright)" }}
           >
             STATLINE
           </span>
         </Link>
 
-        {/* Desktop links */}
-        <div className="hidden sm:flex items-center gap-0.5">
+        {/* Desktop nav links */}
+        <div className="hidden md:flex items-center gap-0.5 flex-shrink-0">
           {[
             { href: "/", label: "Home" },
             { href: "/nba", label: "NBA" },
@@ -50,6 +52,11 @@ function TopNav() {
             </Link>
           ))}
         </div>
+
+        {/* Search — grows to fill available space */}
+        <div className="flex-1 max-w-md ml-auto">
+          <PlayerSearch />
+        </div>
       </div>
     </nav>
   );
@@ -58,7 +65,7 @@ function TopNav() {
 function BottomNav() {
   return (
     <nav
-      className="sm:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t"
+      className="md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t"
       style={{
         background: "rgba(7,7,15,0.92)",
         borderColor: "var(--border)",
@@ -73,20 +80,25 @@ function BottomNav() {
             d: "M3 9.5L12 3l9 6.5V20a2 2 0 01-2 2H5a2 2 0 01-2-2V9.5z",
           },
           {
+            href: "/nba",
+            label: "NBA",
+            d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 2.13 3 4.75S13.66 14.5 12 14.5s-3-2.13-3-4.75S10.34 5 12 5z",
+          },
+          {
             href: "/nba/standings",
             label: "Standings",
-            d: "M3 6h18M3 12h12M3 18h8",
+            d: "M3 6h18M3 12h14M3 18h10",
           },
           {
             href: "/nba/players",
             label: "Players",
-            d: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2M13 7a4 4 0 11-8 0 4 4 0 018 0zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
+            d: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2M13 7a4 4 0 11-8 0 4 4 0 018 0z",
           },
         ].map((tab) => (
           <Link
             key={tab.href}
             href={tab.href}
-            className="flex flex-col items-center gap-0.5 px-5 py-1.5"
+            className="flex flex-col items-center gap-0.5 px-4 py-1.5"
           >
             <svg
               width="20"
@@ -126,7 +138,7 @@ export default function RootLayout({ children }) {
       </head>
       <body>
         <TopNav />
-        <main className="max-w-3xl mx-auto px-4 pt-5 pb-24 sm:pb-10">
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-5 pb-24 md:pb-10">
           {children}
         </main>
         <BottomNav />
