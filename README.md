@@ -1,6 +1,6 @@
 # StatLine
 
-Multi-sport stats hub. Mobile-first. Built for sharing.
+Multi-sport stats hub. Mobile-first. Built for sharing. 
 
 ## Quick Start
 
