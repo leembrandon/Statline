@@ -1,41 +1,25 @@
-# StatLine
+# StatLine — Sports Stats Hub
 
-Multi-sport stats hub. Mobile-first. Built for sharing. 
+NBA, NFL, and MLB stats made simple. Compare players, check scores, and share stats.
 
-## Quick Start
+## Setup
 
-### 1. Set up the database
-Go to your Supabase dashboard → SQL Editor → paste and run `setup_db.sql`
-
-### 2. Sync NBA data
-```bash
-pip install requests
-python sync_nba.py
-```
-
-### 3. Run the app
 ```bash
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+## Deploy to Vercel
 
-### 4. Deploy
-Push to GitHub, connect to Vercel, auto-deploys.
+Push to GitHub, connect the repo in Vercel — it auto-detects Vite and deploys.
 
-## Sync Commands
+## Data
 
-```bash
-python sync_nba.py              # Sync everything
-python sync_nba.py teams        # Just teams
-python sync_nba.py standings    # Just standings
-python sync_nba.py players      # Just players + stats
-python sync_nba.py scores       # Just recent scores
-```
+StatLine reads from Supabase. Run your Python sync scripts to populate the database with NBA data before the app will show anything.
 
 ## Stack
-- **Frontend:** Next.js 15 + Tailwind CSS v4
-- **Database:** Supabase (PostgreSQL)
-- **Data:** ESPN API → Python sync → Supabase → App
-- **Hosting:** Vercel
+
+- **Vite + React** — same setup as Barracks
+- **Tailwind CSS** — utility-first styling
+- **Supabase** — PostgreSQL database (client-side reads)
+- **Vercel** — hosting (free tier)
