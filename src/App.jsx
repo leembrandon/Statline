@@ -383,10 +383,6 @@ function ScoreCard({ game, teamMap, onTeamClick }) {
     </div>
   );
 }
-      )}
-    </div>
-  );
-}
 
 /* ── Scores Tab ── */
 function ScoresView({ games, teamMap, playerStats, onSelectPlayer, onTeamClick }) {
