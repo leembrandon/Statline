@@ -20,7 +20,7 @@ const SPORTS = [
   { id: "mlb", label: "MLB", icon: "⚾", color: "#52b788", active: false },
 ];
 
-const TABS = ["Scores", "Standings", "Players", "Compare"];
+const TABS = ["Scores", "Schedule", "Standings", "Players", "Compare"];
 
 /* ─── HELPERS ─── */
 function fmt(val, dec = 1) {
@@ -82,13 +82,20 @@ function useShareImage() {
 
 /* ─── DATA LAYER ─── */
 async function fetchAllNBAData() {
-  const [games, standings, playerStats, players, teams] = await Promise.all([
-    supaFetch("games", "select=*&sport=eq.nba&order=start_time.desc&limit=50"),
+  const [pastGames, upcomingGames, standings, playerStats, players, teams] = await Promise.all([
+    supaFetch("games", "select=*&sport=eq.nba&status=eq.final&order=start_time.desc&limit=50"),
+    supaFetch("games", "select=*&sport=eq.nba&status=eq.scheduled&order=start_time.asc&limit=50"),
     supaFetch("standings", "select=*&sport=eq.nba&order=conference_rank.asc"),
     supaFetch("nba_player_stats", "select=*&order=points_per_game.desc&limit=1000"),
     supaFetch("players", "select=*&sport=eq.nba"),
     supaFetch("teams", "select=*&sport=eq.nba"),
   ]);
+
+  // Also fetch any live games
+  let liveGames = [];
+  try { liveGames = await supaFetch("games", "select=*&sport=eq.nba&status=eq.in_progress"); } catch {}
+
+  const games = [...liveGames, ...pastGames];
 
   const teamMap = {};
   teams.forEach((t) => (teamMap[t.id] = t));
@@ -134,7 +141,14 @@ async function fetchAllNBAData() {
   // Combine for search — stats players first, then stubs
   const allPlayers = [...enrichedStats, ...playersWithoutStats];
 
-  return { games, standings, east, west, playerStats: allPlayers, enrichedStats, playerMap, teamMap, teamRosters };
+  // Standings lookup by team_id
+  const standingsMap = {};
+  standings.forEach((s) => (standingsMap[s.team_id] = s));
+
+  // All games (past + live) for head-to-head calculations
+  const allGames = [...pastGames, ...liveGames];
+
+  return { games, upcomingGames, allGames, standings, east, west, playerStats: allPlayers, enrichedStats, playerMap, teamMap, teamRosters, standingsMap };
 }
 
 /* ─── SHARED UI ─── */
@@ -351,13 +365,15 @@ function WhosHot({ playerStats, teamMap, onSelectPlayer }) {
 }
 
 /* ── Score Card (expandable) ── */
-function ScoreCard({ game, teamMap, onTeamClick }) {
+function ScoreCard({ game, teamMap, standingsMap, onTeamClick }) {
   const isFinal = game.status === "final";
   const isLive = game.status === "in_progress";
   const home = teamMap[game.home_team_id] || {};
   const away = teamMap[game.away_team_id] || {};
   const homeWon = isFinal && game.home_score > game.away_score;
   const awayWon = isFinal && game.away_score > game.home_score;
+  const homeSt = standingsMap[game.home_team_id];
+  const awaySt = standingsMap[game.away_team_id];
 
   return (
     <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -368,12 +384,13 @@ function ScoreCard({ game, teamMap, onTeamClick }) {
         {isLive && <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#ff3b30" }} /><span style={{ fontSize: "10px", fontWeight: 700, color: "#ff3b30" }}>LIVE</span></span>}
       </div>
       <div className="space-y-1.5">
-        {[{ team: away, score: game.away_score, won: awayWon, lost: isFinal && !awayWon, id: game.away_team_id },
-          { team: home, score: game.home_score, won: homeWon, lost: isFinal && !homeWon, id: game.home_team_id }].map((row, i) => (
+        {[{ team: away, score: game.away_score, won: awayWon, lost: isFinal && !awayWon, id: game.away_team_id, st: awaySt },
+          { team: home, score: game.home_score, won: homeWon, lost: isFinal && !homeWon, id: game.home_team_id, st: homeSt }].map((row, i) => (
           <div key={i} className="flex items-center justify-between">
             <div className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer" onClick={() => onTeamClick(row.id)}>
               {row.team.logo_url && <img src={row.team.logo_url} alt="" className="w-5 h-5 flex-shrink-0" style={{ opacity: row.lost ? 0.4 : 1 }} />}
               <span className="text-sm font-semibold truncate" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.team.abbreviation || "???"}</span>
+              {row.st && <span style={{ fontSize: "10px", color: "#444", marginLeft: "2px" }}>{row.st.wins}-{row.st.losses}</span>}
             </div>
             <span className="text-base font-bold tabular-nums" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.score != null ? row.score : "—"}</span>
           </div>
@@ -385,7 +402,7 @@ function ScoreCard({ game, teamMap, onTeamClick }) {
 }
 
 /* ── Scores Tab ── */
-function ScoresView({ games, teamMap, playerStats, onSelectPlayer, onTeamClick }) {
+function ScoresView({ games, teamMap, standingsMap, playerStats, onSelectPlayer, onTeamClick }) {
   if (!games.length) return <EmptyState message="No games yet" sub="Run the NBA sync script to pull game data" />;
   const grouped = {};
   games.forEach((g) => {
@@ -405,10 +422,117 @@ function ScoresView({ games, teamMap, playerStats, onSelectPlayer, onTeamClick }
             <span className="text-xs" style={{ color: "#444" }}>· {dateGames.length} games</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-            {dateGames.map((g) => <ScoreCard key={g.id} game={g} teamMap={teamMap} onTeamClick={onTeamClick} />)}
+            {dateGames.map((g) => <ScoreCard key={g.id} game={g} teamMap={teamMap} standingsMap={standingsMap} onTeamClick={onTeamClick} />)}
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ── Schedule Tab ── */
+function ScheduleView({ upcomingGames, teamMap, standingsMap, onTeamClick }) {
+  if (!upcomingGames.length) return <EmptyState message="No upcoming games" sub="Schedule data will appear once synced" />;
+
+  const grouped = {};
+  upcomingGames.forEach((g) => {
+    const dateKey = formatGameDate(g.start_time) || "Unknown";
+    if (!grouped[dateKey]) grouped[dateKey] = [];
+    grouped[dateKey].push(g);
+  });
+
+  return (
+    <div className="space-y-5">
+      {Object.entries(grouped).map(([date, dateGames]) => (
+        <div key={date}>
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-1 h-4 rounded" style={{ background: "#4a90d9" }} />
+            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: "#888" }}>{date}</span>
+            <span className="text-xs" style={{ color: "#444" }}>· {dateGames.length} games</span>
+          </div>
+          <div className="space-y-2">
+            {dateGames.map((g) => {
+              const home = teamMap[g.home_team_id] || {};
+              const away = teamMap[g.away_team_id] || {};
+              const homeSt = standingsMap[g.home_team_id];
+              const awaySt = standingsMap[g.away_team_id];
+              return (
+                <div key={g.id} className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span style={{ fontSize: "10px", color: "#4a90d9", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      {formatGameTime(g.start_time)} ET
+                    </span>
+                    {g.venue && <span style={{ fontSize: "10px", color: "#444" }}>{g.venue}</span>}
+                  </div>
+                  <div className="space-y-2">
+                    {[{ team: away, st: awaySt, id: g.away_team_id, label: "Away" },
+                      { team: home, st: homeSt, id: g.home_team_id, label: "Home" }].map((row, i) => (
+                      <div key={i} className="flex items-center justify-between cursor-pointer hover:bg-white/5 rounded-lg px-1 py-0.5 transition-colors" onClick={() => onTeamClick(row.id)}>
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          {row.team.logo_url && <img src={row.team.logo_url} alt="" className="w-6 h-6 flex-shrink-0" />}
+                          <div className="min-w-0">
+                            <span className="text-sm font-semibold text-white truncate block">{row.team.full_name || row.team.abbreviation || "TBD"}</span>
+                            {row.st && <span style={{ fontSize: "10px", color: "#555" }}>{row.st.wins}-{row.st.losses} · #{row.st.conference_rank} {row.team.conference}</span>}
+                          </div>
+                        </div>
+                        <span style={{ fontSize: "10px", color: "#444", textTransform: "uppercase" }}>{row.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Playoff Race Tracker ── */
+function PlayoffRace({ standings, teamMap, onTeamClick }) {
+  if (!standings.length) return null;
+
+  // Get the top team's pct for games back calculation context
+  const getStatus = (rank, pct, gamesBack) => {
+    if (rank <= 6) return { label: "Playoff", color: "#e94560", bg: "rgba(233,69,96,0.1)" };
+    if (rank <= 10) return { label: "Play-in", color: "#ffd166", bg: "rgba(255,209,102,0.1)" };
+    return { label: "Out", color: "#ff6b6b", bg: "rgba(255,107,107,0.08)" };
+  };
+
+  return (
+    <div className="rounded-xl overflow-hidden mb-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="px-3 py-2.5" style={{ background: "rgba(233,69,96,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <span className="text-xs font-bold uppercase tracking-wider" style={{ color: "#e94560" }}>Playoff race</span>
+      </div>
+      {standings.slice(0, 12).map((s, i) => {
+        const t = teamMap[s.team_id] || {};
+        const rank = s.conference_rank || i + 1;
+        const status = getStatus(rank, s.pct, s.games_back);
+        const pctVal = s.pct != null ? Number(s.pct) : 0;
+        const barWidth = Math.max(pctVal * 100, 5);
+
+        return (
+          <div key={s.id} className="px-3 py-2 cursor-pointer hover:bg-white/5 transition-colors" onClick={() => onTeamClick(s.team_id)} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs font-bold" style={{ width: "18px", color: status.color }}>{rank}</span>
+              {t.logo_url && <img src={t.logo_url} alt="" className="w-4 h-4 flex-shrink-0" />}
+              <span className="text-sm font-semibold text-white flex-1 truncate">{t.abbreviation}</span>
+              <span className="text-xs font-semibold tabular-nums" style={{ color: "#aaa" }}>{s.wins}-{s.losses}</span>
+              <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: status.bg, color: status.color, fontSize: "9px" }}>{status.label}</span>
+            </div>
+            {/* Win % bar */}
+            <div className="ml-6 flex items-center gap-2">
+              <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.04)" }}>
+                <div className="h-full rounded-full transition-all" style={{ width: `${barWidth}%`, background: status.color, opacity: 0.6 }} />
+              </div>
+              <span className="text-xs tabular-nums" style={{ color: "#555", minWidth: "32px", textAlign: "right" }}>{fmt(s.pct, 3)}</span>
+            </div>
+            {/* Divider lines between sections */}
+            {(rank === 6 || rank === 10) && <div className="mt-2 border-t border-dashed" style={{ borderColor: rank === 6 ? "rgba(233,69,96,0.3)" : "rgba(255,209,102,0.3)" }} />}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -452,28 +576,75 @@ function StandingsTable({ label, standings, teamMap, onTeamClick }) {
   );
 }
 
-function StandingsView({ east, west, teamMap, onTeamClick }) {
+function StandingsView({ east, west, teamMap, standings, onTeamClick }) {
   if (!east.length && !west.length) return <EmptyState message="No standings data" sub="Run the sync script to populate standings" />;
+
+  const [view, setView] = useState("standings");
+
   return (
     <div className="space-y-4">
-      <StandingsTable label="Eastern Conference" standings={east} teamMap={teamMap} onTeamClick={onTeamClick} />
-      <StandingsTable label="Western Conference" standings={west} teamMap={teamMap} onTeamClick={onTeamClick} />
-      <div className="flex items-center gap-4 mt-2" style={{ fontSize: "10px", color: "#555" }}>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: "#e94560" }} /> Playoff</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: "#ffd166" }} /> Play-in</span>
+      {/* Toggle */}
+      <div className="flex gap-1.5 mb-2">
+        {[{ key: "standings", label: "Standings" }, { key: "playoff", label: "Playoff race" }].map((v) => (
+          <button key={v.key} onClick={() => setView(v.key)} className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all" style={{
+            background: view === v.key ? "rgba(233,69,96,0.15)" : "rgba(255,255,255,0.04)",
+            color: view === v.key ? "#e94560" : "#666",
+            border: view === v.key ? "1px solid rgba(233,69,96,0.3)" : "1px solid transparent",
+          }}>{v.label}</button>
+        ))}
       </div>
+
+      {view === "standings" && (
+        <>
+          <StandingsTable label="Eastern Conference" standings={east} teamMap={teamMap} onTeamClick={onTeamClick} />
+          <StandingsTable label="Western Conference" standings={west} teamMap={teamMap} onTeamClick={onTeamClick} />
+          <div className="flex items-center gap-4 mt-2" style={{ fontSize: "10px", color: "#555" }}>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: "#e94560" }} /> Playoff</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: "#ffd166" }} /> Play-in</span>
+          </div>
+        </>
+      )}
+
+      {view === "playoff" && (
+        <>
+          <PlayoffRace standings={east} teamMap={teamMap} onTeamClick={onTeamClick} />
+          <PlayoffRace standings={west} teamMap={teamMap} onTeamClick={onTeamClick} />
+        </>
+      )}
     </div>
   );
 }
 
 /* ── Team Page ── */
-function TeamPage({ teamId, teamMap, standings, playerStats, games, teamRosters, onBack, onSelectPlayer }) {
+function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, upcomingGames, teamRosters, onBack, onSelectPlayer, onTeamClick }) {
   const team = teamMap[teamId] || {};
   const standing = standings.find((s) => s.team_id === teamId) || {};
   const roster = teamRosters[teamId] || [];
-  const teamGames = games.filter((g) => g.home_team_id === teamId || g.away_team_id === teamId).slice(0, 10);
+  const recentGames = games.filter((g) => g.home_team_id === teamId || g.away_team_id === teamId).slice(0, 10);
+  const upcoming = upcomingGames.filter((g) => g.home_team_id === teamId || g.away_team_id === teamId).slice(0, 5);
   const cardRef = useRef(null);
   const { sharing, share } = useShareImage();
+
+  // Head-to-head season series — calculate from allGames
+  const h2h = useMemo(() => {
+    const teamGames = allGames.filter((g) => g.status === "final" && (g.home_team_id === teamId || g.away_team_id === teamId));
+    const opponents = {};
+    teamGames.forEach((g) => {
+      const isHome = g.home_team_id === teamId;
+      const oppId = isHome ? g.away_team_id : g.home_team_id;
+      const teamScore = isHome ? g.home_score : g.away_score;
+      const oppScore = isHome ? g.away_score : g.home_score;
+      if (!opponents[oppId]) opponents[oppId] = { wins: 0, losses: 0, games: 0 };
+      opponents[oppId].games++;
+      if (teamScore > oppScore) opponents[oppId].wins++;
+      else opponents[oppId].losses++;
+    });
+    // Only show opponents played more than once (series)
+    return Object.entries(opponents)
+      .filter(([, v]) => v.games >= 2)
+      .sort((a, b) => b[1].games - a[1].games)
+      .slice(0, 8);
+  }, [allGames, teamId]);
 
   return (
     <div>
@@ -506,6 +677,57 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, teamRosters,
         <ShareButton onClick={() => share(cardRef, `statline-${team.abbreviation}`)} sharing={sharing} label="📤 Share team card" />
       </div>
 
+      {/* Upcoming games */}
+      {upcoming.length > 0 && (
+        <div className="mb-6">
+          <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#4a90d9" }}>Upcoming</div>
+          {upcoming.map((g) => {
+            const isHome = g.home_team_id === teamId;
+            const opp = teamMap[isHome ? g.away_team_id : g.home_team_id] || {};
+            return (
+              <div key={g.id} className="flex items-center justify-between p-3 rounded-lg mb-1.5 cursor-pointer hover:bg-white/5 transition-colors" style={{ background: "rgba(74,144,217,0.05)", border: "1px solid rgba(74,144,217,0.1)" }} onClick={() => onTeamClick(isHome ? g.away_team_id : g.home_team_id)}>
+                <div className="flex items-center gap-3">
+                  {opp.logo_url && <img src={opp.logo_url} alt="" className="w-5 h-5" />}
+                  <span className="text-sm font-semibold text-white">{isHome ? "vs" : "@"} {opp.full_name || opp.abbreviation}</span>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs font-semibold" style={{ color: "#4a90d9" }}>{formatGameDate(g.start_time)}</div>
+                  <div style={{ fontSize: "10px", color: "#555" }}>{formatGameTime(g.start_time)} ET</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Head-to-head season series */}
+      {h2h.length > 0 && (
+        <div className="mb-6">
+          <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Season series</div>
+          <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
+            {h2h.map(([oppId, record], i) => {
+              const opp = teamMap[oppId] || {};
+              const winning = record.wins > record.losses;
+              const tied = record.wins === record.losses;
+              return (
+                <div key={oppId} className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-white/5 transition-colors" onClick={() => onTeamClick(oppId)} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)", background: i % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent" }}>
+                  {opp.logo_url && <img src={opp.logo_url} alt="" className="w-5 h-5 flex-shrink-0" />}
+                  <span className="text-sm font-semibold text-white flex-1 truncate">{opp.full_name || opp.abbreviation}</span>
+                  <span className="text-sm font-bold tabular-nums" style={{ color: winning ? "#52b788" : tied ? "#ffd166" : "#ff6b6b" }}>
+                    {record.wins}-{record.losses}
+                  </span>
+                  <span className="text-xs px-1.5 py-0.5 rounded" style={{
+                    background: winning ? "rgba(82,183,136,0.12)" : tied ? "rgba(255,209,102,0.12)" : "rgba(255,107,107,0.12)",
+                    color: winning ? "#52b788" : tied ? "#ffd166" : "#ff6b6b",
+                    fontSize: "9px", fontWeight: 700,
+                  }}>{winning ? "LEAD" : tied ? "TIED" : "TRAIL"}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Roster */}
       <div className="mb-6">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Roster · {roster.length} players</div>
@@ -532,7 +754,7 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, teamRosters,
       {/* Recent games */}
       <div>
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent games</div>
-        {teamGames.length > 0 ? teamGames.map((g) => {
+        {recentGames.length > 0 ? recentGames.map((g) => {
           const isHome = g.home_team_id === teamId;
           const opp = teamMap[isHome ? g.away_team_id : g.home_team_id] || {};
           const teamScore = isHome ? g.home_score : g.away_score;
@@ -978,7 +1200,7 @@ export default function App() {
 
           <div className="flex gap-0.5 overflow-x-auto pb-0 -mx-4 px-4" style={{ scrollbarWidth: "none" }}>
             {TABS.map((t) => {
-              const isActive = tab === t || (tab === "_playerDetail" && t === "Players") || (tab === "_teamPage" && t === "Standings");
+              const isActive = tab === t || (tab === "_playerDetail" && t === "Players") || (tab === "_teamPage" && (t === "Standings"));
               return (
                 <button key={t} onClick={() => { setTab(t); setSelectedPlayer(null); setSelectedTeamId(null); setNavHistory([]); }} className="px-3.5 py-2 text-sm font-bold transition-all whitespace-nowrap relative" style={{ color: isActive ? "#e94560" : "#555" }}>
                   {t}
@@ -1004,11 +1226,12 @@ export default function App() {
 
       {/* Content */}
       <div className="max-w-3xl mx-auto px-4 py-5">
-        {tab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} playerStats={data.enrichedStats} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
-        {tab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} onTeamClick={handleSelectTeam} />}
+        {tab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} standingsMap={data.standingsMap} playerStats={data.enrichedStats} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
+        {tab === "Schedule" && <ScheduleView upcomingGames={data.upcomingGames} teamMap={data.teamMap} standingsMap={data.standingsMap} onTeamClick={handleSelectTeam} />}
+        {tab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} standings={data.standings} onTeamClick={handleSelectTeam} />}
         {tab === "Players" && <PlayersView playerStats={data.enrichedStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
         {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} onBack={handleBack} onTeamClick={handleSelectTeam} />}
-        {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.enrichedStats} games={data.games} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} />}
+        {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.enrichedStats} games={data.games} allGames={data.allGames} upcomingGames={data.upcomingGames} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
         {tab === "Compare" && <CompareView playerStats={data.enrichedStats} teamMap={data.teamMap} />}
       </div>
 
