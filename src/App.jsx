@@ -85,7 +85,7 @@ async function fetchAllNBAData() {
   const [games, standings, playerStats, players, teams] = await Promise.all([
     supaFetch("games", "select=*&sport=eq.nba&order=start_time.desc&limit=50"),
     supaFetch("standings", "select=*&sport=eq.nba&order=conference_rank.asc"),
-    supaFetch("nba_player_stats", "select=*&order=points_per_game.desc&limit=200"),
+    supaFetch("nba_player_stats", "select=*&order=points_per_game.desc&limit=1000"),
     supaFetch("players", "select=*&sport=eq.nba"),
     supaFetch("teams", "select=*&sport=eq.nba"),
   ]);
@@ -109,15 +109,32 @@ async function fetchAllNBAData() {
     return t && t.conference && t.conference.toLowerCase().includes("west");
   });
 
+  // Build roster from stats, then fill in any players who have no stats row
   const teamRosters = {};
+  const playerIdsWithStats = new Set();
   enrichedStats.forEach((s) => {
     if (s.team_id) {
       if (!teamRosters[s.team_id]) teamRosters[s.team_id] = [];
       teamRosters[s.team_id].push(s);
+      if (s.player_id) playerIdsWithStats.add(s.player_id);
     }
   });
 
-  return { games, standings, east, west, playerStats: enrichedStats, playerMap, teamMap, teamRosters };
+  // Add players from the players table who don't have stats yet
+  const playersWithoutStats = [];
+  players.forEach((p) => {
+    if (p.team_id && !playerIdsWithStats.has(p.id)) {
+      const stub = { player_id: p.id, name: p.name, position: p.position, team_id: p.team_id, headshot_url: p.headshot_url, espn_id: p.espn_id, jersey_number: p.jersey_number, height: p.height, weight: p.weight, age: p.age, points_per_game: null, rebounds_per_game: null, assists_per_game: null, steals_per_game: null, blocks_per_game: null, turnovers_per_game: null, fg_pct: null, fg3_pct: null, ft_pct: null, minutes_per_game: null, games_played: 0 };
+      if (!teamRosters[p.team_id]) teamRosters[p.team_id] = [];
+      teamRosters[p.team_id].push(stub);
+      playersWithoutStats.push(stub);
+    }
+  });
+
+  // Combine for search — stats players first, then stubs
+  const allPlayers = [...enrichedStats, ...playersWithoutStats];
+
+  return { games, standings, east, west, playerStats: allPlayers, enrichedStats, playerMap, teamMap, teamRosters };
 }
 
 /* ─── SHARED UI ─── */
@@ -1021,12 +1038,12 @@ export default function App() {
 
       {/* Content */}
       <div className="max-w-3xl mx-auto px-4 py-5">
-        {tab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} playerStats={data.playerStats} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
+        {tab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} playerStats={data.enrichedStats} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
         {tab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} onTeamClick={handleSelectTeam} />}
-        {tab === "Players" && <PlayersView playerStats={data.playerStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
+        {tab === "Players" && <PlayersView playerStats={data.enrichedStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
         {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} onBack={handleBack} onTeamClick={handleSelectTeam} />}
-        {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.playerStats} games={data.games} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} />}
-        {tab === "Compare" && <CompareView playerStats={data.playerStats} teamMap={data.teamMap} />}
+        {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.enrichedStats} games={data.games} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} />}
+        {tab === "Compare" && <CompareView playerStats={data.enrichedStats} teamMap={data.teamMap} />}
       </div>
 
       <div className="text-center py-6 mt-8" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
