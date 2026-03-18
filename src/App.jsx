@@ -20,60 +20,72 @@ const SPORTS = [
   { id: "mlb", label: "MLB", icon: "⚾", color: "#52b788", active: false },
 ];
 
-const TABS = ["Scores", "Standings", "Players", "Compare", "Search"];
+const TABS = ["Scores", "Standings", "Players", "Compare"];
 
 /* ─── HELPERS ─── */
 function fmt(val, dec = 1) {
   if (val == null || val === "") return "—";
   return Number(val).toFixed(dec);
 }
-
 function pctColor(val) {
   if (val >= 0.6) return "#52b788";
   if (val < 0.4) return "#ff6b6b";
   return "#c8c8d0";
 }
-
 function streakColor(s) {
   if (!s) return "#666";
   if (s.startsWith("W")) return "#52b788";
   if (s.startsWith("L")) return "#ff6b6b";
   return "#666";
 }
-
 function formatGameTime(dateStr) {
   try {
-    const d = new Date(dateStr);
-    return d.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone: "America/New_York",
-    });
-  } catch {
-    return "";
-  }
+    return new Date(dateStr).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
+  } catch { return ""; }
 }
-
 function formatGameDate(dateStr) {
   try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      timeZone: "America/New_York",
-    });
-  } catch {
-    return "";
-  }
+    return new Date(dateStr).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/New_York" });
+  } catch { return ""; }
+}
+
+/* share helper — generates an image from a ref */
+function useShareImage() {
+  const [sharing, setSharing] = useState(false);
+  const share = useCallback((ref, filename) => {
+    if (!ref.current || sharing) return;
+    setSharing(true);
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    script.onload = () => {
+      window.html2canvas(ref.current, { backgroundColor: "#08080f", scale: 2, useCORS: true }).then((canvas) => {
+        canvas.toBlob((blob) => {
+          if (!blob) { setSharing(false); return; }
+          const file = new File([blob], filename + ".png", { type: "image/png" });
+          if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+            navigator.share({ files: [file], title: filename }).catch(() => {}).finally(() => setSharing(false));
+          } else {
+            const link = document.createElement("a");
+            link.download = filename + ".png";
+            link.href = canvas.toDataURL("image/png");
+            link.click();
+            setSharing(false);
+          }
+        }, "image/png");
+      }).catch(() => setSharing(false));
+    };
+    script.onerror = () => setSharing(false);
+    document.head.appendChild(script);
+  }, [sharing]);
+  return { sharing, share };
 }
 
 /* ─── DATA LAYER ─── */
 async function fetchAllNBAData() {
   const [games, standings, playerStats, players, teams] = await Promise.all([
-    supaFetch("games", "select=*&sport=eq.nba&order=start_time.desc&limit=30"),
+    supaFetch("games", "select=*&sport=eq.nba&order=start_time.desc&limit=50"),
     supaFetch("standings", "select=*&sport=eq.nba&order=conference_rank.asc"),
-    supaFetch("nba_player_stats", "select=*&order=points_per_game.desc&limit=150"),
+    supaFetch("nba_player_stats", "select=*&order=points_per_game.desc&limit=200"),
     supaFetch("players", "select=*&sport=eq.nba"),
     supaFetch("teams", "select=*&sport=eq.nba"),
   ]);
@@ -83,13 +95,11 @@ async function fetchAllNBAData() {
   const playerMap = {};
   players.forEach((p) => (playerMap[p.id] = p));
 
-  // Enrich stats with player info
   const enrichedStats = playerStats.map((s) => {
     const p = playerMap[s.player_id] || {};
     return { ...s, name: p.name, position: p.position, team_id: p.team_id, headshot_url: p.headshot_url, espn_id: p.espn_id, jersey_number: p.jersey_number, height: p.height, weight: p.weight, age: p.age };
   });
 
-  // Split standings by conference
   const east = standings.filter((s) => {
     const t = teamMap[s.team_id];
     return t && t.conference && t.conference.toLowerCase().includes("east");
@@ -99,18 +109,23 @@ async function fetchAllNBAData() {
     return t && t.conference && t.conference.toLowerCase().includes("west");
   });
 
-  return { games, standings, east, west, playerStats: enrichedStats, playerMap, teamMap };
+  const teamRosters = {};
+  enrichedStats.forEach((s) => {
+    if (s.team_id) {
+      if (!teamRosters[s.team_id]) teamRosters[s.team_id] = [];
+      teamRosters[s.team_id].push(s);
+    }
+  });
+
+  return { games, standings, east, west, playerStats: enrichedStats, playerMap, teamMap, teamRosters };
 }
 
-/* ─── COMPONENTS ─── */
-
+/* ─── SHARED UI ─── */
 function LoadingScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "#08080f" }}>
       <div className="text-center space-y-4">
-        <div className="relative w-12 h-12 mx-auto">
-          <div className="w-12 h-12 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} />
-        </div>
+        <div className="w-12 h-12 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} />
         <div>
           <p className="text-sm font-semibold" style={{ color: "#e94560" }}>STATLINE</p>
           <p className="text-xs mt-1" style={{ color: "#555" }}>Loading stats...</p>
@@ -126,9 +141,7 @@ function ErrorScreen({ error, onRetry }) {
       <div className="text-center p-6 rounded-2xl max-w-sm mx-4" style={{ background: "rgba(233,69,96,0.08)", border: "1px solid rgba(233,69,96,0.2)" }}>
         <p className="text-lg font-bold mb-2" style={{ color: "#e94560" }}>Connection error</p>
         <p className="text-sm mb-4" style={{ color: "#888" }}>{error}</p>
-        <button onClick={onRetry} className="px-5 py-2.5 rounded-xl text-sm font-bold" style={{ background: "#e94560", color: "#fff" }}>
-          Try again
-        </button>
+        <button onClick={onRetry} className="px-5 py-2.5 rounded-xl text-sm font-bold" style={{ background: "#e94560", color: "#fff" }}>Try again</button>
       </div>
     </div>
   );
@@ -143,8 +156,186 @@ function EmptyState({ message, sub }) {
   );
 }
 
-/* ── Score Card ── */
-function ScoreCard({ game, teamMap }) {
+function ShareButton({ onClick, sharing, label }) {
+  return (
+    <button onClick={onClick} disabled={sharing} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: sharing ? "rgba(233,69,96,0.2)" : "#e94560", color: "#fff", opacity: sharing ? 0.6 : 1 }}>
+      {sharing ? "Generating..." : label || "📤 Share"}
+    </button>
+  );
+}
+
+function StatBox({ label, value, highlight }) {
+  return (
+    <div className="text-center p-2.5 rounded-lg" style={{ background: "rgba(255,255,255,0.03)" }}>
+      <div style={{ fontSize: "9px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "2px" }}>{label}</div>
+      <div className="font-bold" style={{ fontSize: highlight ? "20px" : "15px", color: highlight ? "#fff" : "#c8c8d0" }}>{value}</div>
+    </div>
+  );
+}
+
+/* ── Universal Search (header overlay) ── */
+function UniversalSearch({ playerStats, teamMap, standings, onSelectPlayer, onSelectTeam, onClose }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const results = useMemo(() => {
+    if (query.length < 2) return { players: [], teams: [] };
+    const q = query.toLowerCase();
+
+    const players = playerStats.filter((p) => {
+      const nameMatch = p.name && p.name.toLowerCase().includes(q);
+      const team = teamMap[p.team_id] || {};
+      const teamMatch = team.name && team.name.toLowerCase().includes(q);
+      const abbrMatch = team.abbreviation && team.abbreviation.toLowerCase().includes(q);
+      return nameMatch || teamMatch || abbrMatch;
+    }).slice(0, 8);
+
+    const teamIds = new Set();
+    const teams = Object.values(teamMap).filter((t) => {
+      const match = (t.name && t.name.toLowerCase().includes(q)) ||
+        (t.full_name && t.full_name.toLowerCase().includes(q)) ||
+        (t.abbreviation && t.abbreviation.toLowerCase().includes(q)) ||
+        (t.city && t.city.toLowerCase().includes(q));
+      if (match && !teamIds.has(t.id)) { teamIds.add(t.id); return true; }
+      return false;
+    }).slice(0, 5);
+
+    return { players, teams };
+  }, [query, playerStats, teamMap]);
+
+  const hasResults = results.players.length > 0 || results.teams.length > 0;
+
+  return (
+    <div className="fixed inset-0 z-[100]" onClick={onClose}>
+      <div className="absolute inset-0" style={{ background: "rgba(8,8,15,0.85)", backdropFilter: "blur(8px)" }} />
+      <div className="relative max-w-lg mx-auto px-4 pt-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 mb-2">
+          <div className="flex-1 relative">
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search players, teams..."
+              className="w-full p-3 pl-10 rounded-xl text-white placeholder-gray-500 outline-none"
+              style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", fontSize: "16px" }}
+            />
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+          <button onClick={onClose} className="px-3 py-3 rounded-xl text-sm font-semibold" style={{ color: "#888" }}>Cancel</button>
+        </div>
+
+        {query.length >= 2 && !hasResults && (
+          <p className="text-sm text-center py-8" style={{ color: "#555" }}>No results for "{query}"</p>
+        )}
+
+        {results.teams.length > 0 && (
+          <div className="mb-3">
+            <div className="text-xs font-bold uppercase tracking-wider px-1 mb-2" style={{ color: "#e94560" }}>Teams</div>
+            {results.teams.map((t) => {
+              const standing = standings.find((s) => s.team_id === t.id);
+              return (
+                <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-white/5 mb-1 transition-colors" style={{ background: "rgba(255,255,255,0.03)" }} onClick={() => { onSelectTeam(t.id); onClose(); }}>
+                  {t.logo_url && <img src={t.logo_url} alt="" className="w-8 h-8 flex-shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold text-white truncate">{t.full_name}</div>
+                    <div className="text-xs" style={{ color: "#555" }}>{t.conference} · {t.division}</div>
+                  </div>
+                  {standing && (
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-sm font-bold text-white">{standing.wins}-{standing.losses}</div>
+                      <div style={{ fontSize: "10px", color: "#555" }}>#{standing.conference_rank}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {results.players.length > 0 && (
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wider px-1 mb-2" style={{ color: "#e94560" }}>Players</div>
+            {results.players.map((s, i) => {
+              const team = teamMap[s.team_id] || {};
+              return (
+                <div key={s.id || i} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-white/5 mb-1 transition-colors" style={{ background: "rgba(255,255,255,0.03)" }} onClick={() => { onSelectPlayer(s); onClose(); }}>
+                  {s.headshot_url && <img src={s.headshot_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold text-white truncate">{s.name}</div>
+                    <div className="flex items-center gap-1.5">
+                      {team.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3" />}
+                      <span style={{ fontSize: "11px", color: "#555" }}>{team.abbreviation} · {s.position}</span>
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-base font-bold text-white">{fmt(s.points_per_game)}</div>
+                    <div style={{ fontSize: "10px", color: "#555" }}>PPG</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Who's Hot ── */
+function WhosHot({ playerStats, teamMap, onSelectPlayer }) {
+  const [cat, setCat] = useState("points_per_game");
+  const cats = [
+    { key: "points_per_game", label: "PTS" },
+    { key: "rebounds_per_game", label: "REB" },
+    { key: "assists_per_game", label: "AST" },
+    { key: "steals_per_game", label: "STL" },
+    { key: "fg3_pct", label: "3P%" },
+  ];
+
+  const top5 = useMemo(() => {
+    return [...playerStats].sort((a, b) => (Number(b[cat]) || 0) - (Number(a[cat]) || 0)).slice(0, 5);
+  }, [playerStats, cat]);
+
+  return (
+    <div className="rounded-xl p-4 mb-6" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-bold text-white">Top performers</span>
+        <div className="flex gap-1">
+          {cats.map((c) => (
+            <button key={c.key} onClick={() => setCat(c.key)} className="px-2 py-1 rounded text-xs font-semibold transition-all" style={{
+              background: cat === c.key ? "rgba(233,69,96,0.15)" : "rgba(255,255,255,0.04)",
+              color: cat === c.key ? "#e94560" : "#666",
+            }}>{c.label}</button>
+          ))}
+        </div>
+      </div>
+      {top5.map((p, i) => {
+        const team = teamMap[p.team_id] || {};
+        return (
+          <div key={p.id || p.player_id} className="flex items-center gap-3 py-2 cursor-pointer hover:bg-white/5 rounded-lg px-1 transition-colors" style={{ borderBottom: i < 4 ? "1px solid rgba(255,255,255,0.03)" : "none" }} onClick={() => onSelectPlayer(p)}>
+            <span className="text-xs font-bold w-5 text-center" style={{ color: i < 3 ? "#e94560" : "#555" }}>{i + 1}</span>
+            {p.headshot_url && <img src={p.headshot_url} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />}
+            <span className="text-sm font-semibold text-white flex-1 truncate">{p.name}</span>
+            <div className="flex items-center gap-2">
+              {team.logo_url && <img src={team.logo_url} alt="" className="w-3.5 h-3.5" />}
+              <span className="text-xs" style={{ color: "#555" }}>{team.abbreviation}</span>
+            </div>
+            <span className="text-sm font-bold tabular-nums" style={{ color: "#e94560", minWidth: "40px", textAlign: "right" }}>
+              {cat.includes("pct") ? fmt(Number(p[cat]), 1) : fmt(p[cat])}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Score Card (expandable) ── */
+function ScoreCard({ game, teamMap, playerStats, onTeamClick }) {
+  const [expanded, setExpanded] = useState(false);
   const isFinal = game.status === "final";
   const isLive = game.status === "in_progress";
   const home = teamMap[game.home_team_id] || {};
@@ -152,37 +343,58 @@ function ScoreCard({ game, teamMap }) {
   const homeWon = isFinal && game.home_score > game.away_score;
   const awayWon = isFinal && game.away_score > game.home_score;
 
+  const homePlayers = useMemo(() => playerStats.filter((p) => p.team_id === game.home_team_id).slice(0, 5), [playerStats, game.home_team_id]);
+  const awayPlayers = useMemo(() => playerStats.filter((p) => p.team_id === game.away_team_id).slice(0, 5), [playerStats, game.away_team_id]);
+
   return (
-    <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-      <div className="flex items-center justify-between mb-2">
-        <span style={{ fontSize: "10px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-          {isFinal ? "Final" : isLive ? game.status_detail || "Live" : formatGameTime(game.start_time)}
-        </span>
-        {isLive && (
-          <span className="flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#ff3b30" }} />
-            <span style={{ fontSize: "10px", fontWeight: 700, color: "#ff3b30" }}>LIVE</span>
+    <div className="rounded-xl overflow-hidden transition-all" style={{ background: "rgba(255,255,255,0.03)", border: expanded ? "1px solid rgba(233,69,96,0.2)" : "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="p-3 cursor-pointer" onClick={() => isFinal && setExpanded(!expanded)}>
+        <div className="flex items-center justify-between mb-2">
+          <span style={{ fontSize: "10px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+            {isFinal ? "Final" : isLive ? game.status_detail || "Live" : formatGameTime(game.start_time)}
           </span>
-        )}
-      </div>
-      <div className="space-y-1.5">
-        {[{ team: away, score: game.away_score, won: awayWon, lost: isFinal && !awayWon }, { team: home, score: game.home_score, won: homeWon, lost: isFinal && !homeWon }].map((row, i) => (
-          <div key={i} className="flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              {row.team.logo_url && <img src={row.team.logo_url} alt="" className="w-5 h-5 flex-shrink-0" style={{ opacity: row.lost ? 0.4 : 1 }} />}
-              <span className="text-sm font-semibold truncate" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>
-                {row.team.abbreviation || "???"}
-              </span>
-            </div>
-            <span className="text-base font-bold tabular-nums" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>
-              {row.score != null ? row.score : "—"}
-            </span>
+          <div className="flex items-center gap-1.5">
+            {isLive && <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#ff3b30" }} /><span style={{ fontSize: "10px", fontWeight: 700, color: "#ff3b30" }}>LIVE</span></span>}
+            {isFinal && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#555" strokeWidth="2" style={{ transform: expanded ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.2s" }}><polyline points="6 9 12 15 18 9"/></svg>}
           </div>
-        ))}
+        </div>
+        <div className="space-y-1.5">
+          {[{ team: away, score: game.away_score, won: awayWon, lost: isFinal && !awayWon, id: game.away_team_id },
+            { team: home, score: game.home_score, won: homeWon, lost: isFinal && !homeWon, id: game.home_team_id }].map((row, i) => (
+            <div key={i} className="flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0 flex-1" onClick={(e) => { e.stopPropagation(); onTeamClick(row.id); }} style={{ cursor: "pointer" }}>
+                {row.team.logo_url && <img src={row.team.logo_url} alt="" className="w-5 h-5 flex-shrink-0" style={{ opacity: row.lost ? 0.4 : 1 }} />}
+                <span className="text-sm font-semibold truncate" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.team.abbreviation || "???"}</span>
+              </div>
+              <span className="text-base font-bold tabular-nums" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.score != null ? row.score : "—"}</span>
+            </div>
+          ))}
+        </div>
+        {!isFinal && !isLive && <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}><span style={{ fontSize: "10px", color: "#444" }}>{formatGameDate(game.start_time)}</span></div>}
       </div>
-      {!isFinal && !isLive && (
-        <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-          <span style={{ fontSize: "10px", color: "#444" }}>{formatGameDate(game.start_time)}</span>
+
+      {expanded && isFinal && (
+        <div className="px-3 pb-3" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+          {[{ label: away.abbreviation, players: awayPlayers, color: away.color },
+            { label: home.abbreviation, players: homePlayers, color: home.color }].map((side) => (
+            <div key={side.label} className="mt-3">
+              <div className="flex items-center gap-2 mb-1.5">
+                <div className="w-1 h-3 rounded" style={{ background: side.color || "#888" }} />
+                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: "#888" }}>{side.label} · Season avgs</span>
+              </div>
+              {side.players.length > 0 ? side.players.map((p) => (
+                <div key={p.id} className="flex items-center gap-2 py-1" style={{ borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+                  <span className="text-xs font-medium text-white flex-1 truncate">{p.name}</span>
+                  <span className="text-xs tabular-nums" style={{ color: "#aaa", minWidth: "32px", textAlign: "center" }}>{fmt(p.points_per_game)}</span>
+                  <span className="text-xs tabular-nums hidden sm:block" style={{ color: "#666", minWidth: "32px", textAlign: "center" }}>{fmt(p.rebounds_per_game)}</span>
+                  <span className="text-xs tabular-nums hidden sm:block" style={{ color: "#666", minWidth: "32px", textAlign: "center" }}>{fmt(p.assists_per_game)}</span>
+                </div>
+              )) : <p className="text-xs py-1" style={{ color: "#444" }}>No player data</p>}
+            </div>
+          ))}
+          <div className="flex gap-4 mt-2 justify-end" style={{ fontSize: "9px", color: "#444" }}>
+            <span>PPG</span><span className="hidden sm:inline">RPG</span><span className="hidden sm:inline">APG</span>
+          </div>
         </div>
       )}
     </div>
@@ -190,10 +402,8 @@ function ScoreCard({ game, teamMap }) {
 }
 
 /* ── Scores Tab ── */
-function ScoresView({ games, teamMap }) {
+function ScoresView({ games, teamMap, playerStats, onSelectPlayer, onTeamClick }) {
   if (!games.length) return <EmptyState message="No games yet" sub="Run the NBA sync script to pull game data" />;
-
-  // Group games by date
   const grouped = {};
   games.forEach((g) => {
     const dateKey = formatGameDate(g.start_time) || "Unknown";
@@ -203,6 +413,7 @@ function ScoresView({ games, teamMap }) {
 
   return (
     <div className="space-y-6">
+      <WhosHot playerStats={playerStats} teamMap={teamMap} onSelectPlayer={onSelectPlayer} />
       {Object.entries(grouped).map(([date, dateGames]) => (
         <div key={date}>
           <div className="flex items-center gap-2 mb-3">
@@ -211,9 +422,7 @@ function ScoresView({ games, teamMap }) {
             <span className="text-xs" style={{ color: "#444" }}>· {dateGames.length} games</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-            {dateGames.map((g) => (
-              <ScoreCard key={g.id} game={g} teamMap={teamMap} />
-            ))}
+            {dateGames.map((g) => <ScoreCard key={g.id} game={g} teamMap={teamMap} playerStats={playerStats} onTeamClick={onTeamClick} />)}
           </div>
         </div>
       ))}
@@ -222,24 +431,22 @@ function ScoresView({ games, teamMap }) {
 }
 
 /* ── Standings Tab ── */
-function StandingsTable({ label, standings, teamMap }) {
+function StandingsTable({ label, standings, teamMap, onTeamClick }) {
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
       <div className="px-3 py-2.5" style={{ background: "rgba(233,69,96,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <span className="text-xs font-bold uppercase tracking-wider" style={{ color: "#e94560" }}>{label}</span>
       </div>
-      {/* Header */}
       <div className="px-3 py-1.5 grid items-center" style={{ gridTemplateColumns: "22px 1fr 36px 36px 48px 48px 48px", borderBottom: "1px solid rgba(255,255,255,0.06)", fontSize: "10px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px" }}>
         <span>#</span><span>Team</span><span className="text-center">W</span><span className="text-center">L</span><span className="text-center">PCT</span>
         <span className="text-center hidden sm:block">STRK</span><span className="text-center hidden sm:block">HOME</span>
       </div>
-      {/* Rows */}
       {standings.map((s, i) => {
         const t = teamMap[s.team_id] || {};
         const rank = s.conference_rank || i + 1;
         const isPlayIn = rank > 6 && rank <= 10;
         return (
-          <div key={s.id} className="px-3 py-2 grid items-center" style={{
+          <div key={s.id} className="px-3 py-2 grid items-center cursor-pointer hover:bg-white/5 transition-colors" onClick={() => onTeamClick(s.team_id)} style={{
             gridTemplateColumns: "22px 1fr 36px 36px 48px 48px 48px",
             borderBottom: "1px solid rgba(255,255,255,0.03)",
             background: i % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent"
@@ -258,20 +465,113 @@ function StandingsTable({ label, standings, teamMap }) {
           </div>
         );
       })}
-      {standings.length === 0 && <div className="p-4 text-center text-xs" style={{ color: "#555" }}>No standings data</div>}
     </div>
   );
 }
 
-function StandingsView({ east, west, teamMap }) {
+function StandingsView({ east, west, teamMap, onTeamClick }) {
   if (!east.length && !west.length) return <EmptyState message="No standings data" sub="Run the sync script to populate standings" />;
   return (
     <div className="space-y-4">
-      <StandingsTable label="Eastern Conference" standings={east} teamMap={teamMap} />
-      <StandingsTable label="Western Conference" standings={west} teamMap={teamMap} />
+      <StandingsTable label="Eastern Conference" standings={east} teamMap={teamMap} onTeamClick={onTeamClick} />
+      <StandingsTable label="Western Conference" standings={west} teamMap={teamMap} onTeamClick={onTeamClick} />
       <div className="flex items-center gap-4 mt-2" style={{ fontSize: "10px", color: "#555" }}>
         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: "#e94560" }} /> Playoff</span>
         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: "#ffd166" }} /> Play-in</span>
+      </div>
+    </div>
+  );
+}
+
+/* ── Team Page ── */
+function TeamPage({ teamId, teamMap, standings, playerStats, games, teamRosters, onBack, onSelectPlayer }) {
+  const team = teamMap[teamId] || {};
+  const standing = standings.find((s) => s.team_id === teamId) || {};
+  const roster = teamRosters[teamId] || [];
+  const teamGames = games.filter((g) => g.home_team_id === teamId || g.away_team_id === teamId).slice(0, 10);
+  const cardRef = useRef(null);
+  const { sharing, share } = useShareImage();
+
+  return (
+    <div>
+      <button onClick={onBack} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Back</button>
+
+      <div ref={cardRef} className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+        <div className="flex items-center gap-4 mb-4">
+          {team.logo_url && <img src={team.logo_url} alt="" className="w-14 h-14 sm:w-16 sm:h-16 flex-shrink-0" />}
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl sm:text-2xl font-black text-white truncate">{team.full_name}</h2>
+            <div className="flex items-center gap-2 mt-1 text-xs" style={{ color: "#888" }}>
+              <span>{team.conference}</span><span>·</span><span>{team.division}</span>
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <StatBox label="Record" value={`${standing.wins || 0}-${standing.losses || 0}`} highlight />
+          <StatBox label="Conf rank" value={standing.conference_rank ? `#${standing.conference_rank}` : "—"} highlight />
+          <StatBox label="Win %" value={standing.pct != null ? fmt(standing.pct, 3) : "—"} />
+          <StatBox label="Streak" value={standing.streak || "—"} />
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <StatBox label="Home" value={standing.home_record || "—"} />
+          <StatBox label="Away" value={standing.away_record || "—"} />
+        </div>
+        <div className="mt-3 text-right"><span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span></div>
+      </div>
+
+      <div className="flex justify-center mb-5">
+        <ShareButton onClick={() => share(cardRef, `statline-${team.abbreviation}`)} sharing={sharing} label="📤 Share team card" />
+      </div>
+
+      {/* Roster */}
+      <div className="mb-6">
+        <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Roster · {roster.length} players</div>
+        {roster.length > 0 ? (
+          <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
+            {roster.sort((a, b) => (Number(b.points_per_game) || 0) - (Number(a.points_per_game) || 0)).map((p, i) => (
+              <div key={p.id || i} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-white/5 transition-colors" style={{ borderBottom: "1px solid rgba(255,255,255,0.03)", background: i % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent" }} onClick={() => onSelectPlayer(p)}>
+                {p.headshot_url && <img src={p.headshot_url} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />}
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-semibold text-white truncate block">{p.name}</span>
+                  <span style={{ fontSize: "10px", color: "#555" }}>{p.position}{p.jersey_number ? ` · #${p.jersey_number}` : ""}</span>
+                </div>
+                <div className="flex gap-3 flex-shrink-0">
+                  <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>PTS</div><div className="text-xs font-bold text-white">{fmt(p.points_per_game)}</div></div>
+                  <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>REB</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(p.rebounds_per_game)}</div></div>
+                  <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>AST</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(p.assists_per_game)}</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <p className="text-xs" style={{ color: "#555" }}>No roster data available</p>}
+      </div>
+
+      {/* Recent games */}
+      <div>
+        <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent games</div>
+        {teamGames.length > 0 ? teamGames.map((g) => {
+          const isHome = g.home_team_id === teamId;
+          const opp = teamMap[isHome ? g.away_team_id : g.home_team_id] || {};
+          const teamScore = isHome ? g.home_score : g.away_score;
+          const oppScore = isHome ? g.away_score : g.home_score;
+          const won = g.status === "final" && teamScore > oppScore;
+          const lost = g.status === "final" && teamScore < oppScore;
+          return (
+            <div key={g.id} className="flex items-center justify-between p-3 rounded-lg mb-1.5" style={{ background: "rgba(255,255,255,0.02)" }}>
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ background: won ? "rgba(82,183,136,0.15)" : lost ? "rgba(255,107,107,0.15)" : "rgba(255,255,255,0.05)", color: won ? "#52b788" : lost ? "#ff6b6b" : "#888" }}>{won ? "W" : lost ? "L" : "—"}</span>
+                <div className="flex items-center gap-2">
+                  {opp.logo_url && <img src={opp.logo_url} alt="" className="w-4 h-4" />}
+                  <span className="text-sm font-semibold text-white">{isHome ? "vs" : "@"} {opp.abbreviation}</span>
+                </div>
+              </div>
+              <div className="text-right">
+                {g.status === "final" ? <span className="text-sm font-bold tabular-nums" style={{ color: won ? "#52b788" : "#ff6b6b" }}>{teamScore}-{oppScore}</span>
+                  : <span className="text-xs" style={{ color: "#555" }}>{formatGameDate(g.start_time)}</span>}
+              </div>
+            </div>
+          );
+        }) : <p className="text-xs" style={{ color: "#555" }}>No recent games</p>}
       </div>
     </div>
   );
@@ -289,42 +589,29 @@ function PlayersView({ playerStats, teamMap, onSelectPlayer }) {
     { key: "fg_pct", label: "FG%" },
     { key: "fg3_pct", label: "3P%" },
   ];
-
-  const sorted = useMemo(() => {
-    return [...playerStats].sort((a, b) => (Number(b[sortBy]) || 0) - (Number(a[sortBy]) || 0));
-  }, [playerStats, sortBy]);
-
+  const sorted = useMemo(() => [...playerStats].sort((a, b) => (Number(b[sortBy]) || 0) - (Number(a[sortBy]) || 0)), [playerStats, sortBy]);
   const sortLabel = sortOptions.find((o) => o.key === sortBy)?.label || "";
-  const isFGStat = sortBy.includes("pct");
 
   if (!playerStats.length) return <EmptyState message="No player data" sub="Run the sync script to pull player stats" />;
 
   return (
     <div>
-      {/* Sort pills */}
       <div className="flex flex-wrap gap-1.5 mb-4">
         {sortOptions.map((opt) => (
           <button key={opt.key} onClick={() => setSortBy(opt.key)} className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all" style={{
             background: sortBy === opt.key ? "rgba(233,69,96,0.15)" : "rgba(255,255,255,0.04)",
             color: sortBy === opt.key ? "#e94560" : "#666",
             border: sortBy === opt.key ? "1px solid rgba(233,69,96,0.3)" : "1px solid transparent",
-          }}>
-            {opt.label}
-          </button>
+          }}>{opt.label}</button>
         ))}
       </div>
       <div className="text-xs mb-3" style={{ color: "#555" }}>{sorted.length} players · Sorted by {sortLabel}</div>
-
-      {/* Player list */}
       <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
         {sorted.map((s, i) => {
           const team = teamMap[s.team_id] || {};
           const mainVal = Number(s[sortBy]) || 0;
           return (
-            <div key={s.id || i} className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer" style={{
-              borderBottom: "1px solid rgba(255,255,255,0.03)",
-              background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent",
-            }} onClick={() => onSelectPlayer && onSelectPlayer(s)}>
+            <div key={s.id || i} className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer hover:bg-white/5 transition-colors" style={{ borderBottom: "1px solid rgba(255,255,255,0.03)", background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent" }} onClick={() => onSelectPlayer(s)}>
               <span className="text-xs font-bold flex-shrink-0" style={{ width: "22px", textAlign: "center", color: i < 3 ? "#e94560" : i < 10 ? "#ffd166" : "#444" }}>{i + 1}</span>
               {s.headshot_url && <img src={s.headshot_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />}
               <div className="flex-1 min-w-0">
@@ -338,25 +625,12 @@ function PlayersView({ playerStats, teamMap, onSelectPlayer }) {
                   <span style={{ fontSize: "10px", color: "#444" }}>{s.games_played} GP</span>
                 </div>
               </div>
-              {/* Context stats — hidden on small mobile */}
-              <div className="text-center hidden sm:block" style={{ minWidth: "40px" }}>
-                <div style={{ fontSize: "9px", color: "#555" }}>PTS</div>
-                <div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(s.points_per_game)}</div>
-              </div>
-              <div className="text-center hidden sm:block" style={{ minWidth: "40px" }}>
-                <div style={{ fontSize: "9px", color: "#555" }}>REB</div>
-                <div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(s.rebounds_per_game)}</div>
-              </div>
-              <div className="text-center hidden sm:block" style={{ minWidth: "40px" }}>
-                <div style={{ fontSize: "9px", color: "#555" }}>AST</div>
-                <div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(s.assists_per_game)}</div>
-              </div>
-              {/* Main stat */}
+              <div className="text-center hidden sm:block" style={{ minWidth: "40px" }}><div style={{ fontSize: "9px", color: "#555" }}>PTS</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(s.points_per_game)}</div></div>
+              <div className="text-center hidden sm:block" style={{ minWidth: "40px" }}><div style={{ fontSize: "9px", color: "#555" }}>REB</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(s.rebounds_per_game)}</div></div>
+              <div className="text-center hidden sm:block" style={{ minWidth: "40px" }}><div style={{ fontSize: "9px", color: "#555" }}>AST</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{fmt(s.assists_per_game)}</div></div>
               <div className="text-center flex-shrink-0" style={{ minWidth: "48px" }}>
                 <div style={{ fontSize: "9px", color: "#555" }}>{sortLabel}</div>
-                <div className="text-base font-bold" style={{ color: i < 3 ? "#e94560" : "#fff" }}>
-                  {isFGStat ? fmt(mainVal, 1) : fmt(mainVal, 1)}
-                </div>
+                <div className="text-base font-bold" style={{ color: i < 3 ? "#e94560" : "#fff" }}>{fmt(mainVal, 1)}</div>
               </div>
             </div>
           );
@@ -366,33 +640,24 @@ function PlayersView({ playerStats, teamMap, onSelectPlayer }) {
   );
 }
 
-/* ── Player Detail (inline view) ── */
-function PlayerDetail({ player, teamMap, onBack }) {
+/* ── Player Detail ── */
+function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
   const team = teamMap[player.team_id] || {};
-
-  function StatBox({ label, value, highlight, wide }) {
-    return (
-      <div className={`text-center p-2.5 rounded-lg ${wide ? "col-span-2" : ""}`} style={{ background: "rgba(255,255,255,0.03)" }}>
-        <div style={{ fontSize: "9px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "2px" }}>{label}</div>
-        <div className="font-bold" style={{ fontSize: highlight ? "20px" : "15px", color: highlight ? "#fff" : "#c8c8d0" }}>{value}</div>
-      </div>
-    );
-  }
+  const cardRef = useRef(null);
+  const { sharing, share } = useShareImage();
 
   return (
     <div>
-      <button onClick={onBack} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>
-        ← Back to players
-      </button>
-      {/* Hero */}
-      <div className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <button onClick={onBack} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Back</button>
+
+      <div ref={cardRef} className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex items-center gap-4">
           {player.headshot_url && <img src={player.headshot_url} alt="" className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover flex-shrink-0" />}
           <div className="flex-1 min-w-0">
             <h2 className="text-xl sm:text-2xl font-black text-white truncate">{player.name}</h2>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
-              {team.logo_url && <img src={team.logo_url} alt="" className="w-4 h-4" />}
-              <span className="text-sm" style={{ color: "#888" }}>{team.full_name || team.name}</span>
+              {team.logo_url && <img src={team.logo_url} alt="" className="w-4 h-4 cursor-pointer" onClick={() => onTeamClick(player.team_id)} />}
+              <span className="text-sm cursor-pointer hover:underline" style={{ color: "#888" }} onClick={() => onTeamClick(player.team_id)}>{team.full_name || team.name}</span>
               {player.position && <span className="text-xs px-2 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.08)", color: "#888" }}>{player.position}</span>}
               {player.jersey_number && <span className="text-sm" style={{ color: "#555" }}>#{player.jersey_number}</span>}
             </div>
@@ -403,33 +668,35 @@ function PlayerDetail({ player, teamMap, onBack }) {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Season averages */}
-      <div className="mb-4">
-        <div className="text-xs uppercase tracking-wider font-bold mb-2" style={{ color: "#e94560" }}>Season averages</div>
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-          <StatBox label="PTS" value={fmt(player.points_per_game)} highlight />
-          <StatBox label="REB" value={fmt(player.rebounds_per_game)} highlight />
-          <StatBox label="AST" value={fmt(player.assists_per_game)} highlight />
-          <StatBox label="STL" value={fmt(player.steals_per_game)} />
-          <StatBox label="BLK" value={fmt(player.blocks_per_game)} />
-          <StatBox label="TO" value={fmt(player.turnovers_per_game)} />
+        <div className="mt-4">
+          <div className="text-xs uppercase tracking-wider font-bold mb-2" style={{ color: "#e94560" }}>Season averages</div>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+            <StatBox label="PTS" value={fmt(player.points_per_game)} highlight />
+            <StatBox label="REB" value={fmt(player.rebounds_per_game)} highlight />
+            <StatBox label="AST" value={fmt(player.assists_per_game)} highlight />
+            <StatBox label="STL" value={fmt(player.steals_per_game)} />
+            <StatBox label="BLK" value={fmt(player.blocks_per_game)} />
+            <StatBox label="TO" value={fmt(player.turnovers_per_game)} />
+          </div>
+        </div>
+        <div className="mt-3">
+          <div className="text-xs uppercase tracking-wider font-bold mb-2" style={{ color: "#e94560" }}>Shooting</div>
+          <div className="grid grid-cols-4 gap-1.5">
+            <StatBox label="FG%" value={fmt(player.fg_pct)} />
+            <StatBox label="3P%" value={fmt(player.fg3_pct)} />
+            <StatBox label="FT%" value={fmt(player.ft_pct)} />
+            <StatBox label="MIN" value={fmt(player.minutes_per_game)} />
+          </div>
+        </div>
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-xs" style={{ color: "#555" }}>{player.games_played} games played</span>
+          <span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span>
         </div>
       </div>
 
-      {/* Shooting */}
-      <div>
-        <div className="text-xs uppercase tracking-wider font-bold mb-2" style={{ color: "#e94560" }}>Shooting</div>
-        <div className="grid grid-cols-4 gap-1.5">
-          <StatBox label="FG%" value={fmt(player.fg_pct)} />
-          <StatBox label="3P%" value={fmt(player.fg3_pct)} />
-          <StatBox label="FT%" value={fmt(player.ft_pct)} />
-          <StatBox label="MIN" value={fmt(player.minutes_per_game)} />
-        </div>
+      <div className="flex justify-center">
+        <ShareButton onClick={() => share(cardRef, `statline-${player.name?.replace(/\s+/g, "-")}`)} sharing={sharing} label="📤 Share player card" />
       </div>
-
-      <div className="mt-4 text-xs" style={{ color: "#555" }}>{player.games_played} games played</div>
     </div>
   );
 }
@@ -440,7 +707,6 @@ function CompareRow({ label, v1, v2, fmtStr = "0.1", higherBetter = true }) {
   const n1 = Number(v1 || 0), n2 = Number(v2 || 0);
   const c1 = higherBetter ? (n1 > n2 ? "#52b788" : n1 < n2 ? "#ff6b6b" : "#ffd166") : (n1 < n2 ? "#52b788" : n1 > n2 ? "#ff6b6b" : "#ffd166");
   const c2 = higherBetter ? (n2 > n1 ? "#52b788" : n2 < n1 ? "#ff6b6b" : "#ffd166") : (n2 < n1 ? "#52b788" : n2 > n1 ? "#ff6b6b" : "#ffd166");
-
   return (
     <div className="grid items-center py-2" style={{ gridTemplateColumns: "1fr auto 1fr", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
       <div className="text-right pr-3"><span className="text-sm font-bold tabular-nums" style={{ color: c1 }}>{f(n1)}</span></div>
@@ -458,7 +724,30 @@ function CompareView({ playerStats, teamMap }) {
   const [show1, setShow1] = useState(false);
   const [show2, setShow2] = useState(false);
   const cardRef = useRef(null);
-  const [sharing, setSharing] = useState(false);
+  const { sharing, share: shareImg } = useShareImage();
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const compareParam = params.get("compare");
+      if (!compareParam) return;
+      const parts = compareParam.split(",").map((s) => decodeURIComponent(s.trim().toLowerCase()));
+      if (parts.length !== 2) return;
+      const found1 = playerStats.find((p) => p.name && p.name.toLowerCase() === parts[0]);
+      const found2 = playerStats.find((p) => p.name && p.name.toLowerCase() === parts[1]);
+      if (found1) { setP1(found1); setQ1(found1.name); }
+      if (found2) { setP2(found2); setQ2(found2.name); }
+    } catch {}
+  }, [playerStats]);
+
+  const updateUrl = (player1, player2) => {
+    if (player1 && player2) {
+      window.history.replaceState(null, "", window.location.pathname + "?compare=" + encodeURIComponent(player1.name) + "," + encodeURIComponent(player2.name));
+    } else {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  };
 
   const search = (q) => {
     if (q.length < 2) return [];
@@ -470,9 +759,13 @@ function CompareView({ playerStats, teamMap }) {
   const r2 = useMemo(() => search(q2), [q2, playerStats]);
 
   const pick = (setter, qSetter, showSetter) => (p) => {
-    setter(p);
-    qSetter(p.name);
-    showSetter(false);
+    setter(p); qSetter(p.name); showSetter(false);
+    // update url after state settles
+    setTimeout(() => {
+      const np1 = setter === setP1 ? p : p1;
+      const np2 = setter === setP2 ? p : p2;
+      updateUrl(np1, np2);
+    }, 0);
   };
 
   const handleItem = (e, pickFn, p) => { e.preventDefault(); e.stopPropagation(); pickFn(p); };
@@ -500,35 +793,14 @@ function CompareView({ playerStats, teamMap }) {
     });
   }
 
-  const handleShareImage = () => {
-    if (!cardRef.current || sharing) return;
-    setSharing(true);
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-    script.onload = () => {
-      window.html2canvas(cardRef.current, { backgroundColor: "#08080f", scale: 2, useCORS: true }).then((canvas) => {
-        canvas.toBlob((blob) => {
-          if (!blob) { setSharing(false); return; }
-          const file = new File([blob], "statline-compare.png", { type: "image/png" });
-          if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-            navigator.share({ files: [file], title: `${p1?.name} vs ${p2?.name} — StatLine` }).catch(() => {}).finally(() => setSharing(false));
-          } else {
-            const link = document.createElement("a");
-            link.download = `statline-${p1?.name}-vs-${p2?.name}.png`;
-            link.href = canvas.toDataURL("image/png");
-            link.click();
-            setSharing(false);
-          }
-        }, "image/png");
-      }).catch(() => setSharing(false));
-    };
-    script.onerror = () => setSharing(false);
-    document.head.appendChild(script);
+  const handleCopyLink = () => {
+    if (!p1 || !p2) return;
+    const url = window.location.origin + window.location.pathname + "?compare=" + encodeURIComponent(p1.name) + "," + encodeURIComponent(p2.name);
+    navigator.clipboard.writeText(url).then(() => { setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2000); }).catch(() => { prompt("Copy this link:", url); });
   };
 
   return (
     <div className="space-y-4">
-      {/* Search inputs */}
       <div className="flex gap-2 items-start">
         <div className="relative flex-1">
           <input type="text" value={q1} onChange={(e) => { setQ1(e.target.value); setP1(null); setShow1(true); }} onFocus={() => setShow1(true)} onBlur={() => setTimeout(() => setShow1(false), 250)} placeholder="Player 1..." className="w-full p-2.5 rounded-xl text-white placeholder-gray-600 outline-none text-sm" style={{ background: "rgba(255,255,255,0.05)", border: p1 ? "1px solid rgba(82,183,136,0.4)" : "1px solid rgba(255,255,255,0.08)" }} />
@@ -561,10 +833,8 @@ function CompareView({ playerStats, teamMap }) {
         </div>
       </div>
 
-      {/* Comparison card */}
       {p1 && p2 && (
         <div ref={cardRef} className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-          {/* Headers */}
           <div className="grid items-center mb-4" style={{ gridTemplateColumns: "1fr auto 1fr" }}>
             <div className="text-right pr-3">
               <div className="flex items-center justify-end gap-2">
@@ -591,85 +861,29 @@ function CompareView({ playerStats, teamMap }) {
               <div className="text-2xl font-black mt-1" style={{ color: p2Wins > p1Wins ? "#52b788" : p2Wins < p1Wins ? "#ff6b6b" : "#ffd166" }}>{p2Wins}</div>
             </div>
           </div>
-
-          {/* Stat rows */}
-          {stats.map((st) => (
-            <CompareRow key={st.k} label={st.label} v1={p1[st.k]} v2={p2[st.k]} higherBetter={st.higherBetter !== false} />
-          ))}
-
-          {/* Share button */}
-          <div className="flex justify-center gap-2 mt-4">
-            <button onClick={handleShareImage} disabled={sharing} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: sharing ? "rgba(233,69,96,0.2)" : "#e94560", color: "#fff", opacity: sharing ? 0.6 : 1 }}>
-              {sharing ? "Generating..." : "📤 Share Card"}
-            </button>
+          {stats.map((st) => <CompareRow key={st.k} label={st.label} v1={p1[st.k]} v2={p2[st.k]} higherBetter={st.higherBetter !== false} />)}
+          <div className="mt-3 flex items-center justify-between">
+            <span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span>
+            <span style={{ fontSize: "10px", color: "#444" }}>{p1.games_played} GP vs {p2.games_played} GP</span>
           </div>
+        </div>
+      )}
+
+      {p1 && p2 && (
+        <div className="flex justify-center gap-2">
+          <ShareButton onClick={() => shareImg(cardRef, `statline-${p1.name}-vs-${p2.name}`)} sharing={sharing} label="📤 Share card" />
+          <button onClick={handleCopyLink} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.06)", color: linkCopied ? "#52b788" : "#888" }}>
+            {linkCopied ? "✓ Copied!" : "🔗 Copy link"}
+          </button>
         </div>
       )}
 
       {!p1 && !p2 && (
         <div className="text-center py-8">
-          <p className="text-sm" style={{ color: "#555" }}>Search for two players to compare their stats head-to-head</p>
+          <p className="text-sm" style={{ color: "#555" }}>Search for two players to compare stats head-to-head</p>
+          <p className="text-xs mt-2" style={{ color: "#444" }}>Share via image or shareable link</p>
         </div>
       )}
-    </div>
-  );
-}
-
-/* ── Search Tab ── */
-function SearchView({ playerStats, teamMap, onSelectPlayer }) {
-  const [query, setQuery] = useState("");
-  const results = useMemo(() => {
-    if (query.length < 2) return [];
-    const q = query.toLowerCase();
-    return playerStats.filter((p) => {
-      const nameMatch = p.name && p.name.toLowerCase().includes(q);
-      const team = teamMap[p.team_id] || {};
-      const teamMatch = team.name && team.name.toLowerCase().includes(q);
-      const abbrMatch = team.abbreviation && team.abbreviation.toLowerCase().includes(q);
-      return nameMatch || teamMatch || abbrMatch;
-    }).slice(0, 20);
-  }, [query, playerStats, teamMap]);
-
-  return (
-    <div className="space-y-3">
-      <input
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search player or team..."
-        className="w-full p-3 rounded-xl text-white placeholder-gray-600 outline-none"
-        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", fontSize: "16px" }}
-      />
-      {query.length >= 2 && results.length === 0 && (
-        <p className="text-sm text-center py-4" style={{ color: "#555" }}>No results for "{query}"</p>
-      )}
-      {results.map((s, i) => {
-        const team = teamMap[s.team_id] || {};
-        return (
-          <div key={s.id || i} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-white/5 transition-colors" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }} onClick={() => onSelectPlayer(s)}>
-            {s.headshot_url && <img src={s.headshot_url} alt="" className="w-10 h-10 rounded-full object-cover" />}
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-white truncate">{s.name}</div>
-              <div className="flex items-center gap-2 mt-0.5">
-                {team.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3" />}
-                <span style={{ fontSize: "11px", color: "#555" }}>{team.full_name} · {s.position}</span>
-              </div>
-            </div>
-            <div className="text-right flex-shrink-0">
-              <div className="text-base font-bold text-white">{fmt(s.points_per_game)}</div>
-              <div style={{ fontSize: "10px", color: "#555" }}>PPG</div>
-            </div>
-            <div className="text-right flex-shrink-0 hidden sm:block">
-              <div className="text-sm font-semibold" style={{ color: "#aaa" }}>{fmt(s.rebounds_per_game)}</div>
-              <div style={{ fontSize: "10px", color: "#555" }}>RPG</div>
-            </div>
-            <div className="text-right flex-shrink-0 hidden sm:block">
-              <div className="text-sm font-semibold" style={{ color: "#aaa" }}>{fmt(s.assists_per_game)}</div>
-              <div style={{ fontSize: "10px", color: "#555" }}>APG</div>
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -683,6 +897,9 @@ export default function App() {
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [selectedTeamId, setSelectedTeamId] = useState(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [navHistory, setNavHistory] = useState([]);
 
   const loadData = useCallback(async () => {
     try {
@@ -690,6 +907,8 @@ export default function App() {
       setError(null);
       const result = await fetchAllNBAData();
       setData(result);
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("compare")) setTab("Compare");
     } catch (e) {
       console.error(e);
       setError(e.message);
@@ -700,30 +919,62 @@ export default function App() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Keyboard shortcut: Cmd/Ctrl+K to open search
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+      if (e.key === "Escape") setSearchOpen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const pushNav = (current) => setNavHistory((prev) => [...prev, current]);
+
   const handleSelectPlayer = (player) => {
+    pushNav({ tab, selectedPlayer, selectedTeamId });
     setSelectedPlayer(player);
+    setSelectedTeamId(null);
     setTab("_playerDetail");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handleBackFromPlayer = () => {
+  const handleSelectTeam = (teamId) => {
+    pushNav({ tab, selectedPlayer, selectedTeamId });
+    setSelectedTeamId(teamId);
     setSelectedPlayer(null);
-    setTab("Players");
+    setTab("_teamPage");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleBack = () => {
+    const prev = navHistory[navHistory.length - 1];
+    if (prev) {
+      setNavHistory((h) => h.slice(0, -1));
+      setTab(prev.tab);
+      setSelectedPlayer(prev.selectedPlayer);
+      setSelectedTeamId(prev.selectedTeamId);
+    } else {
+      setTab("Scores");
+      setSelectedPlayer(null);
+      setSelectedTeamId(null);
+    }
   };
 
   if (loading) return <LoadingScreen />;
   if (error) return <ErrorScreen error={error} onRetry={loadData} />;
 
-  const activeTab = tab === "_playerDetail" ? "_playerDetail" : tab;
-
   return (
     <div className="min-h-screen" style={{ background: "#08080f", color: "#c8c8d0" }}>
-      {/* ── Sticky Header ── */}
+      {/* Sticky Header */}
       <div className="sticky top-0 z-50 backdrop-blur-xl" style={{ background: "rgba(8,8,15,0.92)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="max-w-3xl mx-auto px-4 pt-3 pb-0">
-          {/* Top bar */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-black tracking-tight" style={{ color: "#e94560", letterSpacing: "-0.5px" }}>STATLINE</h1>
+              <h1 className="text-xl font-black tracking-tight cursor-pointer" style={{ color: "#e94560", letterSpacing: "-0.5px" }} onClick={() => { setTab("Scores"); setSelectedPlayer(null); setSelectedTeamId(null); setNavHistory([]); }}>STATLINE</h1>
               <div className="flex gap-0.5 p-0.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)" }}>
                 {SPORTS.map((s) => (
                   <button key={s.id} onClick={() => s.active && setSport(s.id)} className="px-2 py-1 rounded-md text-xs font-bold transition-all" style={{
@@ -731,25 +982,22 @@ export default function App() {
                     color: sport === s.id ? s.color : s.active ? "#555" : "#333",
                     opacity: s.active ? 1 : 0.5,
                     cursor: s.active ? "pointer" : "default",
-                  }}>
-                    {s.icon}
-                  </button>
+                  }}>{s.icon}</button>
                 ))}
               </div>
             </div>
-            <div className="text-right">
-              <span style={{ fontSize: "10px", color: "#444" }}>
-                {data?.games?.length || 0} games · {data?.playerStats?.length || 0} players
-              </span>
-            </div>
+            <button onClick={() => setSearchOpen(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-white/5 transition-colors" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }} aria-label="Search">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span className="text-xs hidden sm:inline" style={{ color: "#555" }}>Search</span>
+              <span className="text-xs hidden sm:inline px-1 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "#444", fontSize: "10px" }}>⌘K</span>
+            </button>
           </div>
 
-          {/* Tab bar — horizontally scrollable */}
-          <div className="flex gap-0.5 overflow-x-auto pb-0 -mx-4 px-4" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+          <div className="flex gap-0.5 overflow-x-auto pb-0 -mx-4 px-4" style={{ scrollbarWidth: "none" }}>
             {TABS.map((t) => {
-              const isActive = activeTab === t || (activeTab === "_playerDetail" && t === "Players");
+              const isActive = tab === t || (tab === "_playerDetail" && t === "Players") || (tab === "_teamPage" && t === "Standings");
               return (
-                <button key={t} onClick={() => { setTab(t); setSelectedPlayer(null); }} className="px-3.5 py-2 text-sm font-bold transition-all whitespace-nowrap relative" style={{ color: isActive ? "#e94560" : "#555" }}>
+                <button key={t} onClick={() => { setTab(t); setSelectedPlayer(null); setSelectedTeamId(null); setNavHistory([]); }} className="px-3.5 py-2 text-sm font-bold transition-all whitespace-nowrap relative" style={{ color: isActive ? "#e94560" : "#555" }}>
                   {t}
                   {isActive && <div className="absolute bottom-0 left-1 right-1 h-0.5 rounded-full" style={{ background: "#e94560" }} />}
                 </button>
@@ -759,17 +1007,28 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Content ── */}
+      {/* Universal Search Overlay */}
+      {searchOpen && (
+        <UniversalSearch
+          playerStats={data.playerStats}
+          teamMap={data.teamMap}
+          standings={data.standings}
+          onSelectPlayer={handleSelectPlayer}
+          onSelectTeam={handleSelectTeam}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
+
+      {/* Content */}
       <div className="max-w-3xl mx-auto px-4 py-5">
-        {activeTab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} />}
-        {activeTab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} />}
-        {activeTab === "Players" && <PlayersView playerStats={data.playerStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
-        {activeTab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} onBack={handleBackFromPlayer} />}
-        {activeTab === "Compare" && <CompareView playerStats={data.playerStats} teamMap={data.teamMap} />}
-        {activeTab === "Search" && <SearchView playerStats={data.playerStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
+        {tab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} playerStats={data.playerStats} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
+        {tab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} onTeamClick={handleSelectTeam} />}
+        {tab === "Players" && <PlayersView playerStats={data.playerStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
+        {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} onBack={handleBack} onTeamClick={handleSelectTeam} />}
+        {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.playerStats} games={data.games} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} />}
+        {tab === "Compare" && <CompareView playerStats={data.playerStats} teamMap={data.teamMap} />}
       </div>
 
-      {/* ── Footer ── */}
       <div className="text-center py-6 mt-8" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
         <p style={{ fontSize: "11px", color: "#333" }}>StatLine · Sports stats made simple</p>
       </div>
