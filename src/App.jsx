@@ -351,8 +351,7 @@ function WhosHot({ playerStats, teamMap, onSelectPlayer }) {
 }
 
 /* ── Score Card (expandable) ── */
-function ScoreCard({ game, teamMap, playerStats, onTeamClick }) {
-  const [expanded, setExpanded] = useState(false);
+function ScoreCard({ game, teamMap, onTeamClick }) {
   const isFinal = game.status === "final";
   const isLive = game.status === "in_progress";
   const home = teamMap[game.home_team_id] || {};
@@ -360,59 +359,30 @@ function ScoreCard({ game, teamMap, playerStats, onTeamClick }) {
   const homeWon = isFinal && game.home_score > game.away_score;
   const awayWon = isFinal && game.away_score > game.home_score;
 
-  const homePlayers = useMemo(() => playerStats.filter((p) => p.team_id === game.home_team_id).slice(0, 5), [playerStats, game.home_team_id]);
-  const awayPlayers = useMemo(() => playerStats.filter((p) => p.team_id === game.away_team_id).slice(0, 5), [playerStats, game.away_team_id]);
-
   return (
-    <div className="rounded-xl overflow-hidden transition-all" style={{ background: "rgba(255,255,255,0.03)", border: expanded ? "1px solid rgba(233,69,96,0.2)" : "1px solid rgba(255,255,255,0.06)" }}>
-      <div className="p-3 cursor-pointer" onClick={() => isFinal && setExpanded(!expanded)}>
-        <div className="flex items-center justify-between mb-2">
-          <span style={{ fontSize: "10px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-            {isFinal ? "Final" : isLive ? game.status_detail || "Live" : formatGameTime(game.start_time)}
-          </span>
-          <div className="flex items-center gap-1.5">
-            {isLive && <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#ff3b30" }} /><span style={{ fontSize: "10px", fontWeight: 700, color: "#ff3b30" }}>LIVE</span></span>}
-            {isFinal && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#555" strokeWidth="2" style={{ transform: expanded ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.2s" }}><polyline points="6 9 12 15 18 9"/></svg>}
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          {[{ team: away, score: game.away_score, won: awayWon, lost: isFinal && !awayWon, id: game.away_team_id },
-            { team: home, score: game.home_score, won: homeWon, lost: isFinal && !homeWon, id: game.home_team_id }].map((row, i) => (
-            <div key={i} className="flex items-center justify-between">
-              <div className="flex items-center gap-2 min-w-0 flex-1" onClick={(e) => { e.stopPropagation(); onTeamClick(row.id); }} style={{ cursor: "pointer" }}>
-                {row.team.logo_url && <img src={row.team.logo_url} alt="" className="w-5 h-5 flex-shrink-0" style={{ opacity: row.lost ? 0.4 : 1 }} />}
-                <span className="text-sm font-semibold truncate" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.team.abbreviation || "???"}</span>
-              </div>
-              <span className="text-base font-bold tabular-nums" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.score != null ? row.score : "—"}</span>
-            </div>
-          ))}
-        </div>
-        {!isFinal && !isLive && <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}><span style={{ fontSize: "10px", color: "#444" }}>{formatGameDate(game.start_time)}</span></div>}
+    <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="flex items-center justify-between mb-2">
+        <span style={{ fontSize: "10px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+          {isFinal ? "Final" : isLive ? game.status_detail || "Live" : formatGameTime(game.start_time)}
+        </span>
+        {isLive && <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#ff3b30" }} /><span style={{ fontSize: "10px", fontWeight: 700, color: "#ff3b30" }}>LIVE</span></span>}
       </div>
-
-      {expanded && isFinal && (
-        <div className="px-3 pb-3" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-          {[{ label: away.abbreviation, players: awayPlayers, color: away.color },
-            { label: home.abbreviation, players: homePlayers, color: home.color }].map((side) => (
-            <div key={side.label} className="mt-3">
-              <div className="flex items-center gap-2 mb-1.5">
-                <div className="w-1 h-3 rounded" style={{ background: side.color || "#888" }} />
-                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: "#888" }}>{side.label} · Season avgs</span>
-              </div>
-              {side.players.length > 0 ? side.players.map((p) => (
-                <div key={p.id} className="flex items-center gap-2 py-1" style={{ borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
-                  <span className="text-xs font-medium text-white flex-1 truncate">{p.name}</span>
-                  <span className="text-xs tabular-nums" style={{ color: "#aaa", minWidth: "32px", textAlign: "center" }}>{fmt(p.points_per_game)}</span>
-                  <span className="text-xs tabular-nums hidden sm:block" style={{ color: "#666", minWidth: "32px", textAlign: "center" }}>{fmt(p.rebounds_per_game)}</span>
-                  <span className="text-xs tabular-nums hidden sm:block" style={{ color: "#666", minWidth: "32px", textAlign: "center" }}>{fmt(p.assists_per_game)}</span>
-                </div>
-              )) : <p className="text-xs py-1" style={{ color: "#444" }}>No player data</p>}
+      <div className="space-y-1.5">
+        {[{ team: away, score: game.away_score, won: awayWon, lost: isFinal && !awayWon, id: game.away_team_id },
+          { team: home, score: game.home_score, won: homeWon, lost: isFinal && !homeWon, id: game.home_team_id }].map((row, i) => (
+          <div key={i} className="flex items-center justify-between">
+            <div className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer" onClick={() => onTeamClick(row.id)}>
+              {row.team.logo_url && <img src={row.team.logo_url} alt="" className="w-5 h-5 flex-shrink-0" style={{ opacity: row.lost ? 0.4 : 1 }} />}
+              <span className="text-sm font-semibold truncate" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.team.abbreviation || "???"}</span>
             </div>
-          ))}
-          <div className="flex gap-4 mt-2 justify-end" style={{ fontSize: "9px", color: "#444" }}>
-            <span>PPG</span><span className="hidden sm:inline">RPG</span><span className="hidden sm:inline">APG</span>
+            <span className="text-base font-bold tabular-nums" style={{ color: row.won ? "#fff" : row.lost ? "#555" : "#c8c8d0" }}>{row.score != null ? row.score : "—"}</span>
           </div>
-        </div>
+        ))}
+      </div>
+      {!isFinal && !isLive && <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}><span style={{ fontSize: "10px", color: "#444" }}>{formatGameDate(game.start_time)}</span></div>}
+    </div>
+  );
+}
       )}
     </div>
   );
@@ -439,7 +409,7 @@ function ScoresView({ games, teamMap, playerStats, onSelectPlayer, onTeamClick }
             <span className="text-xs" style={{ color: "#444" }}>· {dateGames.length} games</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-            {dateGames.map((g) => <ScoreCard key={g.id} game={g} teamMap={teamMap} playerStats={playerStats} onTeamClick={onTeamClick} />)}
+            {dateGames.map((g) => <ScoreCard key={g.id} game={g} teamMap={teamMap} onTeamClick={onTeamClick} />)}
           </div>
         </div>
       ))}
