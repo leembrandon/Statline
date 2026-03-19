@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 /* ─── CONFIG ─── */
 const SUPABASE_URL = "https://snucfaofcihjazipvird.supabase.co/rest/v1";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudWNmYW9mY2loamF6aXB2aXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2ODYzODEsImV4cCI6MjA4OTI2MjM4MX0.nEjx1Lx4i2oruPajbrKwILX5AK1PBfmMqx5PaCL--nQ";
+const SITE_URL = "https://thestatline.vercel.app";
 
 async function supaFetch(table, queryStr) {
   const url = `${SUPABASE_URL}/${table}?${queryStr || "select=*"}`;
@@ -648,7 +649,8 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
             { label: "Home", value: standing.home_record || "—" },
             { label: "Away", value: standing.away_record || "—" },
           ],
-        }, `statline-${team.abbreviation}`)} sharing={sharing} label="📤 Share team card" />
+          shareUrl: SITE_URL,
+        }, `statline-${team.abbreviation}`, SITE_URL)} sharing={sharing} label="📤 Share team card" />
       </div>
 
       {/* Upcoming games */}
@@ -1082,6 +1084,7 @@ function LineShareButtons({ sharing, share, player, direction, threshNum, stat, 
       direction, threshold: threshNum, statLabel,
       games, hits: hits.length, total: recent.length, hitPct,
       seasonAvg: player?.points_per_game,
+      shareUrl: url,
     }, filename, url);
   };
 
@@ -1179,7 +1182,8 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
             { label: "MIN", value: fmt(player.minutes_per_game) },
           ],
           extraLabel: "Shooting",
-        }, `statline-${player.name?.replace(/\s+/g, "-")}`)} sharing={sharing} label="📤 Share player card" />
+          shareUrl: SITE_URL,
+        }, `statline-${player.name?.replace(/\s+/g, "-")}`, SITE_URL)} sharing={sharing} label="📤 Share player card" />
       </div>
 
       {/* Line Check Tool */}
@@ -1492,7 +1496,8 @@ function CompareView({ playerStats, teamMap }) {
             p2: { name: p2.name, position: p2.position, teamAbbr: (teamMap[p2.team_id] || {}).abbreviation, headshotUrl: p2.headshot_url, gamesPlayed: p2.games_played },
             stats: stats.map((st) => ({ label: st.label, v1: p1[st.k], v2: p2[st.k], higherBetter: st.higherBetter !== false })),
             p1Wins, p2Wins,
-          }, `statline-${p1.name}-vs-${p2.name}`)} sharing={sharing} label="📤 Share card" />
+            shareUrl: SITE_URL + "?compare=" + encodeURIComponent(p1.name) + "," + encodeURIComponent(p2.name),
+          }, `statline-${p1.name}-vs-${p2.name}`, SITE_URL + "?compare=" + encodeURIComponent(p1.name) + "," + encodeURIComponent(p2.name))} sharing={sharing} label="📤 Share card" />
           <button onClick={handleCopyLink} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.06)", color: linkCopied ? "#52b788" : "#888" }}>
             {linkCopied ? "✓ Copied!" : "🔗 Copy link"}
           </button>
