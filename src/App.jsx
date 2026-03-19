@@ -882,7 +882,7 @@ function PlayerGameLogUI({ playerId, teamMap }) {
   const { loading, sliced, avgStats, opponents, range, setRange, matchupFilter, setMatchupFilter, matchupOpp } = usePlayerGameLog(playerId, teamMap);
 
   if (loading) return <div className="py-4 text-center"><div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} /></div>;
-  if (sliced.length === 0 && !matchupFilter) return <div className="py-4 text-center text-xs" style={{ color: "#555" }}>No game log data — run <code className="px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)" }}>python sync_nba.py boxscores</code></div>;
+  if (sliced.length === 0 && !matchupFilter) return <div className="py-4 text-center text-xs" style={{ color: "#555" }}>No recent game data available</div>;
 
   return (
     <div>
@@ -953,18 +953,18 @@ function PlayerGameLogUI({ playerId, teamMap }) {
 }
 
 /* ── Line Check Tool ── */
-function LineCheck({ playerId, player, teamMap }) {
-  const [stat, setStat] = useState("points");
-  const [threshold, setThreshold] = useState("");
-  const [direction, setDirection] = useState("over");
-  const [range, setRange] = useState(10);
+function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, initialThreshold, initialRange }) {
+  const [stat, setStat] = useState(initialStat || "points");
+  const [threshold, setThreshold] = useState(initialThreshold || "");
+  const [direction, setDirection] = useState(initialDirection || "over");
+  const [range, setRange] = useState(initialRange || 10);
   const { loading, enriched } = usePlayerGameLog(playerId, teamMap);
   const cardRef = useRef(null);
   const { sharing, share } = useShareImage();
   const team = player ? (teamMap[player.team_id] || {}) : {};
 
   if (loading) return <div className="py-3 text-center"><div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#52b788", borderTopColor: "transparent" }} /></div>;
-  if (!enriched || enriched.length === 0) return <div className="py-3 text-center text-xs" style={{ color: "#555" }}>No game data available for line checks</div>;
+  if (!enriched || enriched.length === 0) return <div className="py-3 text-center text-xs" style={{ color: "#555" }}>No recent game data available for this player</div>;
 
   const statOptions = [
     { key: "points", label: "Points", short: "PTS" }, { key: "rebounds", label: "Rebounds", short: "REB" },
@@ -1046,14 +1046,76 @@ function LineCheck({ playerId, player, teamMap }) {
             </div>
             <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
               <span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span>
-              <span style={{ fontSize: "10px", color: "#444" }}>Season avg: {player ? fmt(player[stat === "fg3_made" ? "fg3_pct" : stat.replace("s", "s_per_game")] || player.points_per_game) : "—"}</span>
+              <span style={{ fontSize: "10px", color: "#444" }}>Season avg: {player ? fmt(player.points_per_game) : "—"} PPG</span>
             </div>
           </div>
-          <div className="flex justify-center mb-2">
-            <ShareButton onClick={() => share(cardRef, `statline-${player?.name?.replace(/\s+/g, "-") || "line"}-${direction}-${threshNum}-${statOptions.find((s) => s.key === stat)?.short || stat}`)} sharing={sharing} label="📤 Share line check" />
-          </div>
+          <LineShareButtons cardRef={cardRef} sharing={sharing} share={share} player={player} direction={direction} threshNum={threshNum} stat={stat} statOptions={statOptions} range={range} />
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── Line Share Buttons (image + link) ── */
+function LineShareButtons({ cardRef, sharing, share, player, direction, threshNum, stat, statOptions, range }) {
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const buildUrl = () => {
+    const params = new URLSearchParams();
+    params.set("line", [player?.name || "", direction, threshNum, stat, range].join(","));
+    return window.location.origin + window.location.pathname + "?" + params.toString();
+  };
+
+  const handleShareImage = () => {
+    if (!cardRef.current || sharing) return;
+    const url = buildUrl();
+    const filename = `statline-${player?.name?.replace(/\s+/g, "-") || "line"}-${direction}-${threshNum}-${statOptions.find((s) => s.key === stat)?.short || stat}`;
+
+    // Use the share helper but override to include URL
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    script.onload = () => {
+      window.html2canvas(cardRef.current, { backgroundColor: "#08080f", scale: 2, useCORS: true }).then((canvas) => {
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          const file = new File([blob], filename + ".png", { type: "image/png" });
+          if (navigator.share && navigator.canShare) {
+            const shareData = { files: [file], title: `${player?.name} ${direction} ${threshNum} ${statOptions.find((s) => s.key === stat)?.label || stat}`, url: url };
+            if (navigator.canShare(shareData)) {
+              navigator.share(shareData).catch(() => {});
+            } else {
+              // Fallback: share without files
+              navigator.share({ title: shareData.title, url: url }).catch(() => {});
+            }
+          } else {
+            // Desktop: download image
+            const link = document.createElement("a");
+            link.download = filename + ".png";
+            link.href = canvas.toDataURL("image/png");
+            link.click();
+          }
+        }, "image/png");
+      });
+    };
+    document.head.appendChild(script);
+  };
+
+  const handleCopyLink = () => {
+    const url = buildUrl();
+    navigator.clipboard.writeText(url).then(() => {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    }).catch(() => { prompt("Copy this link:", url); });
+  };
+
+  return (
+    <div className="flex justify-center gap-2 mb-2">
+      <button onClick={handleShareImage} disabled={sharing} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: sharing ? "rgba(233,69,96,0.2)" : "#e94560", color: "#fff", opacity: sharing ? 0.6 : 1 }}>
+        {sharing ? "Generating..." : "📤 Share"}
+      </button>
+      <button onClick={handleCopyLink} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.06)", color: linkCopied ? "#52b788" : "#888" }}>
+        {linkCopied ? "✓ Copied!" : "🔗 Copy link"}
+      </button>
     </div>
   );
 }
@@ -1135,6 +1197,25 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
 function LinesTab({ playerStats, teamMap }) {
   const [query, setQuery] = useState("");
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [urlLineParams, setUrlLineParams] = useState(null);
+
+  // Read ?line= URL parameter on mount
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const lineParam = params.get("line");
+      if (!lineParam) return;
+      const parts = lineParam.split(",");
+      if (parts.length >= 4) {
+        const playerName = decodeURIComponent(parts[0]).toLowerCase();
+        const found = playerStats.find((p) => p.name && p.name.toLowerCase() === playerName);
+        if (found) {
+          setSelectedPlayer(found);
+          setUrlLineParams({ direction: parts[1] || "over", threshold: parts[2] || "", stat: parts[3] || "points", range: parseInt(parts[4]) || 10 });
+        }
+      }
+    } catch {}
+  }, [playerStats]);
 
   const results = useMemo(() => {
     if (query.length < 2) return [];
@@ -1226,7 +1307,7 @@ function LinesTab({ playerStats, teamMap }) {
             </div>
           </div>
 
-          <LineCheck playerId={selectedPlayer.player_id || selectedPlayer.id} player={selectedPlayer} teamMap={teamMap} />
+          <LineCheck playerId={selectedPlayer.player_id || selectedPlayer.id} player={selectedPlayer} teamMap={teamMap} initialStat={urlLineParams?.stat} initialDirection={urlLineParams?.direction} initialThreshold={urlLineParams?.threshold} initialRange={urlLineParams?.range} />
         </div>
       )}
     </div>
@@ -1441,6 +1522,7 @@ export default function App() {
       setData(result);
       const params = new URLSearchParams(window.location.search);
       if (params.get("compare")) setTab("Compare");
+      if (params.get("line")) setTab("Lines");
     } catch (e) {
       console.error(e);
       setError(e.message);
