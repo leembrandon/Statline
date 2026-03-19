@@ -49,137 +49,20 @@ function formatGameDate(dateStr) {
   } catch { return ""; }
 }
 
-/* ─── SHARE HELPER (FIXED FOR CRISP IMAGES) ─── */
-function useShareImage() {
+/* share helper — uses pure Canvas API renderer (see shareRenderer.js) */
+import { renderPlayerCard, renderTeamCard, renderLineCard, renderCompareCard, shareCanvas } from "./shareRenderer.js";
+
+function useShareCanvas() {
   const [sharing, setSharing] = useState(false);
-  const html2canvasLoaded = useRef(false);
-
-  const loadHtml2Canvas = useCallback(() => {
-    return new Promise((resolve, reject) => {
-      if (html2canvasLoaded.current && window.html2canvas) {
-        resolve(window.html2canvas);
-        return;
-      }
-      const script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-      script.onload = () => {
-        html2canvasLoaded.current = true;
-        resolve(window.html2canvas);
-      };
-      script.onerror = () => reject(new Error("Failed to load html2canvas"));
-      document.head.appendChild(script);
-    });
-  }, []);
-
-  const share = useCallback(async (ref, filename) => {
-    if (!ref.current || sharing) return;
+  const share = useCallback(async (renderFn, data, filename, shareUrl) => {
+    if (sharing) return;
     setSharing(true);
-
     try {
-      const html2canvas = await loadHtml2Canvas();
-      const el = ref.current;
-
-      /* Pre-capture: convert all cross-origin images to inline base64
-         so html2canvas doesn't choke on CORS or render blurry placeholders */
-      const images = el.querySelectorAll("img");
-      const origSrcs = new Map();
-
-      await Promise.all(
-        Array.from(images).map(async (img) => {
-          if (!img.src || img.src.startsWith("data:")) return;
-          try {
-            const resp = await fetch(img.src, { mode: "cors" });
-            const blob = await resp.blob();
-            const dataUrl = await new Promise((res) => {
-              const reader = new FileReader();
-              reader.onloadend = () => res(reader.result);
-              reader.readAsDataURL(blob);
-            });
-            origSrcs.set(img, img.src);
-            img.src = dataUrl;
-          } catch {
-            /* If CORS fails, leave the original src — html2canvas will try useCORS */
-          }
-        })
-      );
-
-      const canvas = await html2canvas(el, {
-        backgroundColor: "#08080f",
-        scale: 3, /* 3x for retina-crisp output */
-        useCORS: true,
-        allowTaint: false,
-        logging: false,
-        /* Fix distortion: force a consistent pixel width */
-        width: el.scrollWidth,
-        height: el.scrollHeight,
-        /* Clone handler: normalize CSS that html2canvas can't render */
-        onclone: (_doc, clonedEl) => {
-          /* Set explicit dimensions so nothing collapses */
-          clonedEl.style.width = el.scrollWidth + "px";
-          clonedEl.style.height = "auto";
-          clonedEl.style.overflow = "visible";
-
-          /* Fix all images inside the clone */
-          const clonedImages = clonedEl.querySelectorAll("img");
-          clonedImages.forEach((img) => {
-            /* Remove object-fit — html2canvas doesn't support it properly */
-            img.style.objectFit = "initial";
-            /* Remove border-radius — html2canvas renders these blurry/clipped wrong */
-            img.style.borderRadius = "0";
-            /* Ensure images have explicit sizing */
-            const rect = img.getBoundingClientRect
-              ? { width: img.offsetWidth, height: img.offsetHeight }
-              : { width: 32, height: 32 };
-            if (!img.style.width) img.style.width = rect.width + "px";
-            if (!img.style.height) img.style.height = rect.height + "px";
-            /* Prevent blurry downscaling */
-            img.style.imageRendering = "auto";
-          });
-
-          /* Remove backdrop-filter (not supported) */
-          clonedEl.style.backdropFilter = "none";
-          clonedEl.style.webkitBackdropFilter = "none";
-
-          /* Fix truncated text — ensure it's visible in capture */
-          const truncated = clonedEl.querySelectorAll(".truncate, [class*='truncate']");
-          truncated.forEach((node) => {
-            node.style.overflow = "visible";
-            node.style.textOverflow = "clip";
-            node.style.whiteSpace = "normal";
-          });
-
-          /* Remove any animate classes that can cause mid-frame captures */
-          const animated = clonedEl.querySelectorAll("[class*='animate-']");
-          animated.forEach((node) => {
-            node.style.animation = "none";
-          });
-        },
-      });
-
-      /* Restore original image srcs */
-      origSrcs.forEach((src, img) => { img.src = src; });
-
-      const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
-      if (!blob) { setSharing(false); return; }
-
-      const file = new File([blob], filename + ".png", { type: "image/png" });
-
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: filename }).catch(() => {});
-      } else {
-        const link = document.createElement("a");
-        link.download = filename + ".png";
-        link.href = URL.createObjectURL(blob);
-        link.click();
-        URL.revokeObjectURL(link.href);
-      }
-    } catch (err) {
-      console.error("Share capture failed:", err);
-    } finally {
-      setSharing(false);
-    }
-  }, [sharing, loadHtml2Canvas]);
-
+      const canvas = await renderFn(data);
+      await shareCanvas(canvas, filename, shareUrl);
+    } catch (e) { console.error("Share render error:", e); }
+    finally { setSharing(false); }
+  }, [sharing]);
   return { sharing, share };
 }
 
@@ -573,7 +456,8 @@ function ScheduleView({ upcomingGames, teamMap, standingsMap, onTeamClick }) {
 function PlayoffRace({ standings, teamMap, onTeamClick }) {
   if (!standings.length) return null;
 
-  const getStatus = (rank) => {
+  // Get the top team's pct for games back calculation context
+  const getStatus = (rank, pct, gamesBack) => {
     if (rank <= 6) return { label: "Playoff", color: "#e94560", bg: "rgba(233,69,96,0.1)" };
     if (rank <= 10) return { label: "Play-in", color: "#ffd166", bg: "rgba(255,209,102,0.1)" };
     return { label: "Out", color: "#ff6b6b", bg: "rgba(255,107,107,0.08)" };
@@ -587,7 +471,7 @@ function PlayoffRace({ standings, teamMap, onTeamClick }) {
       {standings.slice(0, 12).map((s, i) => {
         const t = teamMap[s.team_id] || {};
         const rank = s.conference_rank || i + 1;
-        const status = getStatus(rank);
+        const status = getStatus(rank, s.pct, s.games_back);
         const pctVal = s.pct != null ? Number(s.pct) : 0;
         const barWidth = Math.max(pctVal * 100, 5);
 
@@ -600,12 +484,14 @@ function PlayoffRace({ standings, teamMap, onTeamClick }) {
               <span className="text-xs font-semibold tabular-nums" style={{ color: "#aaa" }}>{s.wins}-{s.losses}</span>
               <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: status.bg, color: status.color, fontSize: "9px" }}>{status.label}</span>
             </div>
+            {/* Win % bar */}
             <div className="ml-6 flex items-center gap-2">
               <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.04)" }}>
                 <div className="h-full rounded-full transition-all" style={{ width: `${barWidth}%`, background: status.color, opacity: 0.6 }} />
               </div>
               <span className="text-xs tabular-nums" style={{ color: "#555", minWidth: "32px", textAlign: "right" }}>{fmt(s.pct, 3)}</span>
             </div>
+            {/* Divider lines between sections */}
             {(rank === 6 || rank === 10) && <div className="mt-2 border-t border-dashed" style={{ borderColor: rank === 6 ? "rgba(233,69,96,0.3)" : "rgba(255,209,102,0.3)" }} />}
           </div>
         );
@@ -660,6 +546,7 @@ function StandingsView({ east, west, teamMap, standings, onTeamClick }) {
 
   return (
     <div className="space-y-4">
+      {/* Toggle */}
       <div className="flex gap-1.5 mb-2">
         {[{ key: "standings", label: "Standings" }, { key: "playoff", label: "Playoff race" }].map((v) => (
           <button key={v.key} onClick={() => setView(v.key)} className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all" style={{
@@ -698,9 +585,9 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
   const roster = teamRosters[teamId] || [];
   const recentGames = games.filter((g) => g.home_team_id === teamId || g.away_team_id === teamId).slice(0, 10);
   const upcoming = upcomingGames.filter((g) => g.home_team_id === teamId || g.away_team_id === teamId).slice(0, 5);
-  const cardRef = useRef(null);
-  const { sharing, share } = useShareImage();
+  const { sharing, share } = useShareCanvas();
 
+  // Head-to-head season series — calculate from allGames
   const h2h = useMemo(() => {
     const teamGames = allGames.filter((g) => g.status === "final" && (g.home_team_id === teamId || g.away_team_id === teamId));
     const opponents = {};
@@ -714,6 +601,7 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
       if (teamScore > oppScore) opponents[oppId].wins++;
       else opponents[oppId].losses++;
     });
+    // Only show opponents played more than once (series)
     return Object.entries(opponents)
       .filter(([, v]) => v.games >= 2)
       .sort((a, b) => b[1].games - a[1].games)
@@ -724,7 +612,7 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
     <div>
       <button onClick={onBack} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Back</button>
 
-      <div ref={cardRef} className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex items-center gap-4 mb-4">
           {team.logo_url && <img src={team.logo_url} alt="" className="w-14 h-14 sm:w-16 sm:h-16 flex-shrink-0" />}
           <div className="flex-1 min-w-0">
@@ -748,9 +636,22 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
       </div>
 
       <div className="flex justify-center mb-5">
-        <ShareButton onClick={() => share(cardRef, `statline-${team.abbreviation}`)} sharing={sharing} label="📤 Share team card" />
+        <ShareButton onClick={() => share(renderTeamCard, {
+          name: team.full_name, conference: team.conference, division: team.division, logoUrl: team.logo_url,
+          stats: [
+            { label: "Record", value: `${standing.wins || 0}-${standing.losses || 0}`, highlight: true },
+            { label: "Conf rank", value: standing.conference_rank ? `#${standing.conference_rank}` : "—", highlight: true },
+            { label: "Win %", value: standing.pct != null ? fmt(standing.pct, 3) : "—" },
+            { label: "Streak", value: standing.streak || "—" },
+          ],
+          stats2: [
+            { label: "Home", value: standing.home_record || "—" },
+            { label: "Away", value: standing.away_record || "—" },
+          ],
+        }, `statline-${team.abbreviation}`)} sharing={sharing} label="📤 Share team card" />
       </div>
 
+      {/* Upcoming games */}
       {upcoming.length > 0 && (
         <div className="mb-6">
           <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#4a90d9" }}>Upcoming</div>
@@ -773,6 +674,7 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
         </div>
       )}
 
+      {/* Head-to-head season series */}
       {h2h.length > 0 && (
         <div className="mb-6">
           <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Season series</div>
@@ -800,6 +702,7 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
         </div>
       )}
 
+      {/* Roster */}
       <div className="mb-6">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Roster · {roster.length} players</div>
         {roster.length > 0 ? (
@@ -822,6 +725,7 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
         ) : <p className="text-xs" style={{ color: "#555" }}>No roster data available</p>}
       </div>
 
+      {/* Recent games */}
       <div>
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent games</div>
         {recentGames.length > 0 ? recentGames.map((g) => {
@@ -1052,8 +956,7 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
   const [direction, setDirection] = useState(initialDirection || "over");
   const [range, setRange] = useState(initialRange || 10);
   const { loading, enriched } = usePlayerGameLog(playerId, teamMap);
-  const cardRef = useRef(null);
-  const { sharing, share } = useShareImage();
+  const { sharing, share } = useShareCanvas();
   const team = player ? (teamMap[player.team_id] || {}) : {};
 
   if (loading) return <div className="py-3 text-center"><div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#52b788", borderTopColor: "transparent" }} /></div>;
@@ -1074,6 +977,7 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
 
   return (
     <div>
+      {/* Controls */}
       <div className="rounded-xl p-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex flex-wrap gap-1.5 mb-3">
           {statOptions.map((s) => (
@@ -1097,9 +1001,11 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
         </div>
       </div>
 
+      {/* Result card (shareable — includes player info) */}
       {hasThreshold && (
         <div>
-          <div ref={cardRef} className="rounded-xl p-4 mb-2" style={{ background: hitPct >= 60 ? "rgba(82,183,136,0.06)" : hitPct >= 40 ? "rgba(255,209,102,0.06)" : "rgba(255,107,107,0.06)", border: `1px solid ${hitPct >= 60 ? "rgba(82,183,136,0.15)" : hitPct >= 40 ? "rgba(255,209,102,0.15)" : "rgba(255,107,107,0.15)"}` }}>
+          <div className="rounded-xl p-4 mb-2" style={{ background: hitPct >= 60 ? "rgba(82,183,136,0.06)" : hitPct >= 40 ? "rgba(255,209,102,0.06)" : "rgba(255,107,107,0.06)", border: `1px solid ${hitPct >= 60 ? "rgba(82,183,136,0.15)" : hitPct >= 40 ? "rgba(255,209,102,0.15)" : "rgba(255,107,107,0.15)"}` }}>
+            {/* Player info header inside shareable area */}
             {player && (
               <div className="flex items-center gap-3 mb-3 pb-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                 {player.headshot_url && <img src={player.headshot_url} alt="" className="w-10 h-10 rounded-full object-cover" />}
@@ -1139,7 +1045,7 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
               <span style={{ fontSize: "10px", color: "#444" }}>Season avg: {player ? fmt(player.points_per_game) : "—"} PPG</span>
             </div>
           </div>
-          <LineShareButtons cardRef={cardRef} sharing={sharing} share={share} player={player} direction={direction} threshNum={threshNum} stat={stat} statOptions={statOptions} range={range} />
+          <LineShareButtons sharing={sharing} share={share} player={player} direction={direction} threshNum={threshNum} stat={stat} statOptions={statOptions} range={range} recent={recent} hits={hits} hitPct={hitPct} teamAbbr={team.abbreviation} teamLogoUrl={team.logo_url} />
         </div>
       )}
     </div>
@@ -1147,7 +1053,7 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
 }
 
 /* ── Line Share Buttons (image + link) ── */
-function LineShareButtons({ cardRef, sharing, share, player, direction, threshNum, stat, statOptions, range }) {
+function LineShareButtons({ sharing, share, player, direction, threshNum, stat, statOptions, range, recent, hits, hitPct, teamAbbr, teamLogoUrl }) {
   const [linkCopied, setLinkCopied] = useState(false);
 
   const buildUrl = () => {
@@ -1156,9 +1062,27 @@ function LineShareButtons({ cardRef, sharing, share, player, direction, threshNu
     return window.location.origin + window.location.pathname + "?" + params.toString();
   };
 
+  const statLabel = statOptions.find((s) => s.key === stat)?.label || stat;
+
   const handleShareImage = () => {
+    if (sharing) return;
+    const url = buildUrl();
     const filename = `statline-${player?.name?.replace(/\s+/g, "-") || "line"}-${direction}-${threshNum}-${statOptions.find((s) => s.key === stat)?.short || stat}`;
-    share(cardRef, filename);
+
+    const games = recent.map((g) => {
+      const val = Number(g[stat]) || 0;
+      const hit = direction === "over" ? val >= threshNum : val < threshNum;
+      return { value: val, oppAbbr: g.opp?.abbreviation, hit };
+    });
+
+    share(renderLineCard, {
+      playerName: player?.name, position: player?.position,
+      headshotUrl: player?.headshot_url, teamLogoUrl: teamLogoUrl,
+      teamAbbr: teamAbbr,
+      direction, threshold: threshNum, statLabel,
+      games, hits: hits.length, total: recent.length, hitPct,
+      seasonAvg: player?.points_per_game,
+    }, filename, url);
   };
 
   const handleCopyLink = () => {
@@ -1184,15 +1108,14 @@ function LineShareButtons({ cardRef, sharing, share, player, direction, threshNu
 /* ── Player Detail (the killer page) ── */
 function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
   const team = teamMap[player.team_id] || {};
-  const cardRef = useRef(null);
-  const { sharing, share } = useShareImage();
+  const { sharing, share } = useShareCanvas();
   const pid = player.player_id || player.id;
 
   return (
     <div>
       <button onClick={onBack} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Back</button>
 
-      <div ref={cardRef} className="rounded-xl p-4 mb-2" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="rounded-xl p-4 mb-2" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex items-center gap-4">
           {player.headshot_url && <img src={player.headshot_url} alt="" className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover flex-shrink-0" />}
           <div className="flex-1 min-w-0">
@@ -1236,14 +1159,36 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
         </div>
       </div>
       <div className="flex justify-center mb-6">
-        <ShareButton onClick={() => share(cardRef, `statline-${player.name?.replace(/\s+/g, "-")}`)} sharing={sharing} label="📤 Share player card" />
+        <ShareButton onClick={() => share(renderPlayerCard, {
+          name: player.name, position: player.position, jerseyNumber: player.jersey_number,
+          height: player.height, weight: player.weight, age: player.age,
+          headshotUrl: player.headshot_url, teamLogoUrl: team.logo_url,
+          teamName: team.full_name || team.name, gamesPlayed: player.games_played,
+          mainStats: [
+            { label: "PTS", value: fmt(player.points_per_game), highlight: true },
+            { label: "REB", value: fmt(player.rebounds_per_game), highlight: true },
+            { label: "AST", value: fmt(player.assists_per_game), highlight: true },
+            { label: "STL", value: fmt(player.steals_per_game) },
+            { label: "BLK", value: fmt(player.blocks_per_game) },
+            { label: "TO", value: fmt(player.turnovers_per_game) },
+          ],
+          extraStats: [
+            { label: "FG%", value: fmt(player.fg_pct) },
+            { label: "3P%", value: fmt(player.fg3_pct) },
+            { label: "FT%", value: fmt(player.ft_pct) },
+            { label: "MIN", value: fmt(player.minutes_per_game) },
+          ],
+          extraLabel: "Shooting",
+        }, `statline-${player.name?.replace(/\s+/g, "-")}`)} sharing={sharing} label="📤 Share player card" />
       </div>
 
+      {/* Line Check Tool */}
       <div className="mb-6">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#52b788" }}>Line check</div>
         <LineCheck playerId={pid} player={player} teamMap={teamMap} />
       </div>
 
+      {/* Recent Form & Game Log */}
       <div className="mb-4">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent form & game log</div>
         <PlayerGameLogUI playerId={pid} teamMap={teamMap} />
@@ -1258,6 +1203,7 @@ function LinesTab({ playerStats, teamMap }) {
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [urlLineParams, setUrlLineParams] = useState(null);
 
+  // Read ?line= URL parameter on mount
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -1295,6 +1241,7 @@ function LinesTab({ playerStats, teamMap }) {
           </div>
           <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search player..." className="w-full p-3 rounded-xl text-white placeholder-gray-600 outline-none mb-3" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", fontSize: "16px" }} />
           
+          {/* Search results */}
           {results.length > 0 && (
             <div className="space-y-1">
               {results.map((p, i) => {
@@ -1316,6 +1263,7 @@ function LinesTab({ playerStats, teamMap }) {
             </div>
           )}
 
+          {/* Popular players when no search */}
           {query.length < 2 && (
             <div>
               <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "#555" }}>Top scorers</div>
@@ -1344,6 +1292,7 @@ function LinesTab({ playerStats, teamMap }) {
         </div>
       ) : (
         <div>
+          {/* Selected player header */}
           <button onClick={() => setSelectedPlayer(null)} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Pick different player</button>
           
           <div className="flex items-center gap-3 p-3 rounded-xl mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1391,8 +1340,7 @@ function CompareView({ playerStats, teamMap }) {
   const [p2, setP2] = useState(null);
   const [show1, setShow1] = useState(false);
   const [show2, setShow2] = useState(false);
-  const cardRef = useRef(null);
-  const { sharing, share: shareImg } = useShareImage();
+  const { sharing, share: shareImg } = useShareCanvas();
   const [linkCopied, setLinkCopied] = useState(false);
 
   useEffect(() => {
@@ -1428,6 +1376,7 @@ function CompareView({ playerStats, teamMap }) {
 
   const pick = (setter, qSetter, showSetter) => (p) => {
     setter(p); qSetter(p.name); showSetter(false);
+    // update url after state settles
     setTimeout(() => {
       const np1 = setter === setP1 ? p : p1;
       const np2 = setter === setP2 ? p : p2;
@@ -1501,7 +1450,7 @@ function CompareView({ playerStats, teamMap }) {
       </div>
 
       {p1 && p2 && (
-        <div ref={cardRef} className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+        <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="grid items-center mb-4" style={{ gridTemplateColumns: "1fr auto 1fr" }}>
             <div className="text-right pr-3">
               <div className="flex items-center justify-end gap-2">
@@ -1538,7 +1487,12 @@ function CompareView({ playerStats, teamMap }) {
 
       {p1 && p2 && (
         <div className="flex justify-center gap-2">
-          <ShareButton onClick={() => shareImg(cardRef, `statline-${p1.name}-vs-${p2.name}`)} sharing={sharing} label="📤 Share card" />
+          <ShareButton onClick={() => shareImg(renderCompareCard, {
+            p1: { name: p1.name, position: p1.position, teamAbbr: (teamMap[p1.team_id] || {}).abbreviation, headshotUrl: p1.headshot_url, gamesPlayed: p1.games_played },
+            p2: { name: p2.name, position: p2.position, teamAbbr: (teamMap[p2.team_id] || {}).abbreviation, headshotUrl: p2.headshot_url, gamesPlayed: p2.games_played },
+            stats: stats.map((st) => ({ label: st.label, v1: p1[st.k], v2: p2[st.k], higherBetter: st.higherBetter !== false })),
+            p1Wins, p2Wins,
+          }, `statline-${p1.name}-vs-${p2.name}`)} sharing={sharing} label="📤 Share card" />
           <button onClick={handleCopyLink} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.06)", color: linkCopied ? "#52b788" : "#888" }}>
             {linkCopied ? "✓ Copied!" : "🔗 Copy link"}
           </button>
@@ -1587,6 +1541,7 @@ export default function App() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Keyboard shortcut: Cmd/Ctrl+K to open search
   useEffect(() => {
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -1636,6 +1591,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen" style={{ background: "#08080f", color: "#c8c8d0" }}>
+      {/* Sticky Header */}
       <div className="sticky top-0 z-50 backdrop-blur-xl" style={{ background: "rgba(8,8,15,0.92)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="max-w-3xl mx-auto px-4 pt-3 pb-0">
           <div className="flex items-center justify-between mb-3">
@@ -1673,6 +1629,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* Search Overlay */}
       {searchOpen && (
         <SimpleSearch
           playerStats={data.playerStats}
@@ -1684,6 +1641,7 @@ export default function App() {
         />
       )}
 
+      {/* Content */}
       <div className="max-w-3xl mx-auto px-4 py-5">
         {tab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} standingsMap={data.standingsMap} playerStats={data.enrichedStats} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
         {tab === "Schedule" && <ScheduleView upcomingGames={data.upcomingGames} teamMap={data.teamMap} standingsMap={data.standingsMap} onTeamClick={handleSelectTeam} />}
