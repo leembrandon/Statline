@@ -20,7 +20,7 @@ const SPORTS = [
   { id: "mlb", label: "MLB", icon: "⚾", color: "#52b788", active: false },
 ];
 
-const TABS = ["Scores", "Schedule", "Standings", "Players", "Compare"];
+const TABS = ["Scores", "Schedule", "Standings", "Players", "Lines", "Compare"];
 
 /* ─── HELPERS ─── */
 function fmt(val, dec = 1) {
@@ -953,7 +953,7 @@ function PlayerGameLogUI({ playerId, teamMap }) {
 }
 
 /* ── Line Check Tool ── */
-function LineCheck({ playerId, teamMap }) {
+function LineCheck({ playerId, player, teamMap }) {
   const [stat, setStat] = useState("points");
   const [threshold, setThreshold] = useState("");
   const [direction, setDirection] = useState("over");
@@ -961,13 +961,15 @@ function LineCheck({ playerId, teamMap }) {
   const { loading, enriched } = usePlayerGameLog(playerId, teamMap);
   const cardRef = useRef(null);
   const { sharing, share } = useShareImage();
+  const team = player ? (teamMap[player.team_id] || {}) : {};
 
-  if (loading) return null;
-  if (!enriched || enriched.length === 0) return null;
+  if (loading) return <div className="py-3 text-center"><div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#52b788", borderTopColor: "transparent" }} /></div>;
+  if (!enriched || enriched.length === 0) return <div className="py-3 text-center text-xs" style={{ color: "#555" }}>No game data available for line checks</div>;
 
   const statOptions = [
-    { key: "points", label: "Points" }, { key: "rebounds", label: "Rebounds" }, { key: "assists", label: "Assists" },
-    { key: "steals", label: "Steals" }, { key: "blocks", label: "Blocks" }, { key: "fg3_made", label: "3-Pointers" },
+    { key: "points", label: "Points", short: "PTS" }, { key: "rebounds", label: "Rebounds", short: "REB" },
+    { key: "assists", label: "Assists", short: "AST" }, { key: "steals", label: "Steals", short: "STL" },
+    { key: "blocks", label: "Blocks", short: "BLK" }, { key: "fg3_made", label: "3-Pointers", short: "3PT" },
   ];
 
   const threshNum = Number(threshold);
@@ -975,59 +977,80 @@ function LineCheck({ playerId, teamMap }) {
   const hasThreshold = threshold !== "" && !isNaN(threshNum);
   const hits = hasThreshold ? recent.filter((g) => direction === "over" ? (Number(g[stat]) || 0) >= threshNum : (Number(g[stat]) || 0) < threshNum) : [];
   const hitPct = hasThreshold && recent.length > 0 ? (hits.length / recent.length * 100) : 0;
+  const statLabel = statOptions.find((s) => s.key === stat)?.label || stat;
 
   return (
     <div>
+      {/* Controls */}
       <div className="rounded-xl p-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex flex-wrap gap-1.5 mb-3">
           {statOptions.map((s) => (
-            <button key={s.key} onClick={() => setStat(s.key)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all" style={{
+            <button key={s.key} onClick={() => setStat(s.key)} className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all" style={{
               background: stat === s.key ? "rgba(82,183,136,0.15)" : "rgba(255,255,255,0.04)",
               color: stat === s.key ? "#52b788" : "#666",
             }}>{s.label}</button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
-            <button onClick={() => setDirection("over")} className="px-3 py-1.5 text-xs font-bold" style={{ background: direction === "over" ? "rgba(82,183,136,0.2)" : "transparent", color: direction === "over" ? "#52b788" : "#666" }}>Over</button>
-            <button onClick={() => setDirection("under")} className="px-3 py-1.5 text-xs font-bold" style={{ background: direction === "under" ? "rgba(255,107,107,0.2)" : "transparent", color: direction === "under" ? "#ff6b6b" : "#666" }}>Under</button>
+            <button onClick={() => setDirection("over")} className="px-3 py-2 text-xs font-bold transition-all" style={{ background: direction === "over" ? "rgba(82,183,136,0.2)" : "transparent", color: direction === "over" ? "#52b788" : "#666" }}>Over</button>
+            <button onClick={() => setDirection("under")} className="px-3 py-2 text-xs font-bold transition-all" style={{ background: direction === "under" ? "rgba(255,107,107,0.2)" : "transparent", color: direction === "under" ? "#ff6b6b" : "#666" }}>Under</button>
           </div>
-          <input type="number" inputMode="decimal" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="Line" className="p-1.5 rounded-lg text-white text-sm text-center outline-none" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", width: "72px", fontSize: "16px" }} />
+          <input type="number" inputMode="decimal" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="Line" className="p-2 rounded-lg text-white text-sm text-center outline-none" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", width: "72px", fontSize: "16px" }} />
           <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
             {[5, 10, 15, 20].map((n) => (
-              <button key={n} onClick={() => setRange(n)} className="px-2 py-1.5 text-xs font-bold" style={{ background: range === n ? "rgba(233,69,96,0.15)" : "transparent", color: range === n ? "#e94560" : "#666" }}>L{n}</button>
+              <button key={n} onClick={() => setRange(n)} className="px-2.5 py-2 text-xs font-bold transition-all" style={{ background: range === n ? "rgba(233,69,96,0.15)" : "transparent", color: range === n ? "#e94560" : "#666" }}>L{n}</button>
             ))}
           </div>
         </div>
       </div>
 
+      {/* Result card (shareable — includes player info) */}
       {hasThreshold && (
-        <div ref={cardRef} className="rounded-xl p-4 mb-3" style={{ background: hitPct >= 60 ? "rgba(82,183,136,0.06)" : hitPct >= 40 ? "rgba(255,209,102,0.06)" : "rgba(255,107,107,0.06)", border: `1px solid ${hitPct >= 60 ? "rgba(82,183,136,0.15)" : hitPct >= 40 ? "rgba(255,209,102,0.15)" : "rgba(255,107,107,0.15)"}` }}>
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <div className="text-xs font-bold uppercase" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{direction} {threshNum} {statOptions.find((s) => s.key === stat)?.label}</div>
-              <div className="text-xs" style={{ color: "#555" }}>Last {recent.length} games</div>
-            </div>
-            <div className="text-right">
-              <div className="text-3xl font-black" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{hits.length}/{recent.length}</div>
-              <div className="text-sm font-bold" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{hitPct.toFixed(0)}%</div>
-            </div>
-          </div>
-          <div className="flex gap-1.5 flex-wrap mb-2">
-            {recent.map((g, i) => {
-              const val = Number(g[stat]) || 0;
-              const hit = direction === "over" ? val >= threshNum : val < threshNum;
-              return (
-                <div key={i} className="flex flex-col items-center">
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold" style={{ background: hit ? "rgba(82,183,136,0.2)" : "rgba(255,107,107,0.15)", color: hit ? "#52b788" : "#ff6b6b", fontSize: "10px" }}>{val}</div>
-                  <span style={{ fontSize: "8px", color: "#444", marginTop: "2px" }}>{g.opp?.abbreviation}</span>
+        <div>
+          <div ref={cardRef} className="rounded-xl p-4 mb-2" style={{ background: hitPct >= 60 ? "rgba(82,183,136,0.06)" : hitPct >= 40 ? "rgba(255,209,102,0.06)" : "rgba(255,107,107,0.06)", border: `1px solid ${hitPct >= 60 ? "rgba(82,183,136,0.15)" : hitPct >= 40 ? "rgba(255,209,102,0.15)" : "rgba(255,107,107,0.15)"}` }}>
+            {/* Player info header inside shareable area */}
+            {player && (
+              <div className="flex items-center gap-3 mb-3 pb-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                {player.headshot_url && <img src={player.headshot_url} alt="" className="w-10 h-10 rounded-full object-cover" />}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-white truncate">{player.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    {team.logo_url && <img src={team.logo_url} alt="" className="w-3.5 h-3.5" />}
+                    <span style={{ fontSize: "11px", color: "#555" }}>{team.abbreviation} · {player.position}</span>
+                  </div>
                 </div>
-              );
-            })}
+              </div>
+            )}
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-sm font-bold uppercase" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{direction} {threshNum} {statLabel}</div>
+                <div className="text-xs" style={{ color: "#555" }}>Last {recent.length} games</div>
+              </div>
+              <div className="text-right">
+                <div className="text-3xl font-black" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{hits.length}/{recent.length}</div>
+                <div className="text-sm font-bold" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{hitPct.toFixed(0)}%</div>
+              </div>
+            </div>
+            <div className="flex gap-1.5 flex-wrap mb-2">
+              {recent.map((g, i) => {
+                const val = Number(g[stat]) || 0;
+                const hit = direction === "over" ? val >= threshNum : val < threshNum;
+                return (
+                  <div key={i} className="flex flex-col items-center">
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold" style={{ background: hit ? "rgba(82,183,136,0.2)" : "rgba(255,107,107,0.15)", color: hit ? "#52b788" : "#ff6b6b", fontSize: "10px" }}>{val}</div>
+                    <span style={{ fontSize: "8px", color: "#444", marginTop: "2px" }}>{g.opp?.abbreviation}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+              <span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span>
+              <span style={{ fontSize: "10px", color: "#444" }}>Season avg: {player ? fmt(player[stat === "fg3_made" ? "fg3_pct" : stat.replace("s", "s_per_game")] || player.points_per_game) : "—"}</span>
+            </div>
           </div>
-          <div className="flex items-center justify-between mt-2">
-            <span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span>
-            <ShareButton onClick={() => share(cardRef, `statline-line-check`)} sharing={sharing} label="📤 Share" />
+          <div className="flex justify-center mb-2">
+            <ShareButton onClick={() => share(cardRef, `statline-${player?.name?.replace(/\s+/g, "-") || "line"}-${direction}-${threshNum}-${statOptions.find((s) => s.key === stat)?.short || stat}`)} sharing={sharing} label="📤 Share line check" />
           </div>
         </div>
       )}
@@ -1096,7 +1119,7 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
       {/* Line Check Tool */}
       <div className="mb-6">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#52b788" }}>Line check</div>
-        <LineCheck playerId={pid} teamMap={teamMap} />
+        <LineCheck playerId={pid} player={player} teamMap={teamMap} />
       </div>
 
       {/* Recent Form & Game Log */}
@@ -1104,6 +1127,108 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent form & game log</div>
         <PlayerGameLogUI playerId={pid} teamMap={teamMap} />
       </div>
+    </div>
+  );
+}
+
+/* ── Lines Tab (dedicated top-level line checker) ── */
+function LinesTab({ playerStats, teamMap }) {
+  const [query, setQuery] = useState("");
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
+
+  const results = useMemo(() => {
+    if (query.length < 2) return [];
+    const q = query.toLowerCase();
+    return playerStats.filter((p) => p.name && p.name.toLowerCase().includes(q))
+      .sort((a, b) => (Number(b.points_per_game) || 0) - (Number(a.points_per_game) || 0))
+      .slice(0, 8);
+  }, [query, playerStats]);
+
+  const team = selectedPlayer ? (teamMap[selectedPlayer.team_id] || {}) : {};
+
+  return (
+    <div>
+      {!selectedPlayer ? (
+        <div>
+          <div className="mb-4">
+            <h2 className="text-lg font-bold text-white mb-1">Line check</h2>
+            <p className="text-xs" style={{ color: "#555" }}>Search a player to check how often they hit a stat line</p>
+          </div>
+          <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search player..." className="w-full p-3 rounded-xl text-white placeholder-gray-600 outline-none mb-3" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", fontSize: "16px" }} />
+          
+          {/* Search results */}
+          {results.length > 0 && (
+            <div className="space-y-1">
+              {results.map((p, i) => {
+                const t = teamMap[p.team_id] || {};
+                return (
+                  <div key={p.id || i} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-white/5 transition-colors" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.04)" }} onClick={() => { setSelectedPlayer(p); setQuery(""); }}>
+                    {p.headshot_url && <img src={p.headshot_url} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0" />}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold text-white truncate">{p.name}</div>
+                      <div className="flex items-center gap-1.5">{t.logo_url && <img src={t.logo_url} alt="" className="w-3 h-3" />}<span style={{ fontSize: "11px", color: "#555" }}>{t.abbreviation} · {p.position}</span></div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-sm font-bold text-white">{fmt(p.points_per_game)}</div>
+                      <div style={{ fontSize: "10px", color: "#555" }}>PPG</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Popular players when no search */}
+          {query.length < 2 && (
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "#555" }}>Top scorers</div>
+              <div className="space-y-1">
+                {playerStats.filter((p) => p.points_per_game).sort((a, b) => (Number(b.points_per_game) || 0) - (Number(a.points_per_game) || 0)).slice(0, 12).map((p, i) => {
+                  const t = teamMap[p.team_id] || {};
+                  return (
+                    <div key={p.id || i} className="flex items-center gap-3 p-2.5 rounded-xl cursor-pointer hover:bg-white/5 transition-colors" style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent" }} onClick={() => setSelectedPlayer(p)}>
+                      <span className="text-xs font-bold w-5 text-center" style={{ color: i < 3 ? "#e94560" : "#444" }}>{i + 1}</span>
+                      {p.headshot_url && <img src={p.headshot_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-semibold text-white truncate block">{p.name}</span>
+                        <div className="flex items-center gap-1">{t.logo_url && <img src={t.logo_url} alt="" className="w-3 h-3" />}<span style={{ fontSize: "10px", color: "#555" }}>{t.abbreviation}</span></div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-bold" style={{ color: "#52b788" }}>{fmt(p.points_per_game)}</div>
+                        <div style={{ fontSize: "9px", color: "#555" }}>PPG</div>
+                      </div>
+                      <span className="text-xs font-bold px-2 py-1 rounded-lg" style={{ background: "rgba(82,183,136,0.1)", color: "#52b788", fontSize: "10px" }}>Check line →</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          {/* Selected player header */}
+          <button onClick={() => setSelectedPlayer(null)} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Pick different player</button>
+          
+          <div className="flex items-center gap-3 p-3 rounded-xl mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            {selectedPlayer.headshot_url && <img src={selectedPlayer.headshot_url} alt="" className="w-12 h-12 rounded-full object-cover flex-shrink-0" />}
+            <div className="flex-1 min-w-0">
+              <div className="text-base font-bold text-white truncate">{selectedPlayer.name}</div>
+              <div className="flex items-center gap-1.5">
+                {team.logo_url && <img src={team.logo_url} alt="" className="w-4 h-4" />}
+                <span className="text-xs" style={{ color: "#888" }}>{team.full_name} · {selectedPlayer.position}</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 flex-shrink-0">
+              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>PTS</div><div className="text-sm font-bold text-white">{fmt(selectedPlayer.points_per_game)}</div></div>
+              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>REB</div><div className="text-sm font-bold" style={{ color: "#aaa" }}>{fmt(selectedPlayer.rebounds_per_game)}</div></div>
+              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>AST</div><div className="text-sm font-bold" style={{ color: "#aaa" }}>{fmt(selectedPlayer.assists_per_game)}</div></div>
+            </div>
+          </div>
+
+          <LineCheck playerId={selectedPlayer.player_id || selectedPlayer.id} player={selectedPlayer} teamMap={teamMap} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1432,6 +1557,7 @@ export default function App() {
         {tab === "Schedule" && <ScheduleView upcomingGames={data.upcomingGames} teamMap={data.teamMap} standingsMap={data.standingsMap} onTeamClick={handleSelectTeam} />}
         {tab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} standings={data.standings} onTeamClick={handleSelectTeam} />}
         {tab === "Players" && <PlayersView playerStats={data.enrichedStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
+        {tab === "Lines" && <LinesTab playerStats={data.enrichedStats} teamMap={data.teamMap} />}
         {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} onBack={handleBack} onTeamClick={handleSelectTeam} />}
         {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.enrichedStats} games={data.games} allGames={data.allGames} upcomingGames={data.upcomingGames} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
         {tab === "Compare" && <CompareView playerStats={data.enrichedStats} teamMap={data.teamMap} />}
