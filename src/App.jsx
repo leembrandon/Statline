@@ -236,12 +236,22 @@ function SmartSearch({ playerStats, enrichedStats, teamMap, standings, games, al
   // Build lookup structures
   const playersByName = useMemo(() => {
     const map = {};
-    playerStats.forEach((p) => {
+    // Sort by PPG descending so the best player wins name collisions
+    const sorted = [...playerStats].sort((a, b) => (Number(b.points_per_game) || 0) - (Number(a.points_per_game) || 0));
+    sorted.forEach((p) => {
       if (p.name) {
-        map[p.name.toLowerCase()] = p;
-        // Also index by last name
+        const full = p.name.toLowerCase();
+        // Full name always wins (don't overwrite)
+        if (!map[full]) map[full] = p;
         const parts = p.name.split(" ");
-        if (parts.length > 1) map[parts[parts.length - 1].toLowerCase()] = p;
+        if (parts.length > 1) {
+          // Last name — only set if not already taken by a higher PPG player
+          const last = parts[parts.length - 1].toLowerCase();
+          if (!map[last]) map[last] = p;
+          // First name — only set if not already taken
+          const first = parts[0].toLowerCase();
+          if (!map[first]) map[first] = p;
+        }
       }
     });
     return map;
@@ -300,8 +310,17 @@ function SmartSearch({ playerStats, enrichedStats, teamMap, standings, games, al
 
   // Find second player (excluding first)
   const findSecondPlayer = useCallback((text, first) => {
-    const lower = text.toLowerCase();
-    const firstName = first?.name?.toLowerCase() || "";
+    if (!first?.name) return null;
+    // Remove first player's name from the query to avoid re-matching
+    let lower = text.toLowerCase();
+    const firstName = first.name.toLowerCase();
+    lower = lower.replace(firstName, "").trim();
+    // Also try removing just last name
+    const firstParts = first.name.split(" ");
+    if (firstParts.length > 1) {
+      lower = lower.replace(firstParts[firstParts.length - 1].toLowerCase(), "").trim();
+    }
+    // Now search in what remains
     let bestMatch = null;
     let bestLen = 0;
     for (const [name, p] of Object.entries(playersByName)) {
@@ -335,8 +354,12 @@ function SmartSearch({ playerStats, enrichedStats, teamMap, standings, games, al
     const lower = q.toLowerCase().trim();
     const tokens = lower.split(/\s+/);
 
-    // Extract numbers
-    const numbers = tokens.filter((t) => /^\d+\.?\d*$/.test(t)).map(Number);
+    // Extract numbers — strip +, -, and other symbols
+    const numbers = [];
+    for (const t of tokens) {
+      const cleaned = t.replace(/[^0-9.]/g, "");
+      if (cleaned && !isNaN(Number(cleaned))) numbers.push(Number(cleaned));
+    }
     const hasVs = lower.includes(" vs ") || lower.includes(" versus ") || lower.includes(" against ");
     const hasOver = lower.includes("over") || lower.includes("above") || lower.includes("o ");
     const hasUnder = lower.includes("under") || lower.includes("below") || lower.includes("u ");
@@ -344,7 +367,7 @@ function SmartSearch({ playerStats, enrichedStats, teamMap, standings, games, al
     const hasHome = lower.includes(" home");
     const hasAway = lower.includes(" away") || lower.includes(" road");
     const hasCareer = lower.includes("career");
-    const hasWho = lower.startsWith("who ");
+    const hasWho = lower.startsWith("who ") || lower.startsWith("who's ") || lower.startsWith("whos ") || lower.startsWith("who is ");
 
     // Extract "last N" value
     let lastN = null;
