@@ -188,13 +188,18 @@ function drawSectionLabel(ctx, text, x, y, color = ACCENT) {
   return y + 18;
 }
 
-/** Draw the STATLINE branding at the bottom */
-function drawBranding(ctx, y, rightAlign = true) {
-  const x = rightAlign ? CARD_W - PAD : PAD;
-  const align = rightAlign ? "right" : "left";
-  drawText(ctx, "STATLINE", x, y, {
-    font: `700 10px ${FONT}`, color: BRAND, align,
+/** Draw the STATLINE branding + optional URL at the bottom */
+function drawBranding(ctx, y, shareUrl) {
+  drawText(ctx, "STATLINE", PAD, y, {
+    font: `700 10px ${FONT}`, color: BRAND,
   });
+  if (shareUrl) {
+    // Show a clean display URL (strip protocol, trailing slash)
+    const displayUrl = shareUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    drawText(ctx, displayUrl, CARD_W - PAD, y, {
+      font: `400 9px ${FONT}`, color: MUTED, align: "right",
+    });
+  }
   return y + 16;
 }
 
@@ -213,6 +218,7 @@ function fmt(val, dec = 1) {
  *   extraStats: [{ label, value }],                // e.g. FG% / 3P% …
  *   extraLabel?: string,                           // e.g. "Shooting"
  *   accentColor?: string,
+ *   shareUrl?: string,                              // rendered on the card image
  * }
  */
 export async function renderPlayerCard(data) {
@@ -241,7 +247,8 @@ export async function renderPlayerCard(data) {
     h += extraRows * 50;
   }
   h += 12;     // gap
-  h += 16;     // branding + games played
+  h += 16;     // games played line
+  h += 16;     // branding + url
   h += PAD;    // bottom
 
   const { canvas, ctx } = createCanvas(CARD_W, h);
@@ -302,8 +309,9 @@ export async function renderPlayerCard(data) {
   cy += 6;
   if (data.gamesPlayed != null) {
     drawText(ctx, `${data.gamesPlayed} games played`, PAD, cy, { font: `400 11px ${FONT}`, color: FAINT });
+    cy += 16;
   }
-  drawBranding(ctx, cy);
+  drawBranding(ctx, cy, data.shareUrl);
 
   return canvas;
 }
@@ -316,6 +324,7 @@ export async function renderPlayerCard(data) {
  *   stats:  [{ label, value, highlight? }],   // Record, Conf rank, Win%, Streak
  *   stats2?: [{ label, value }],              // Home, Away
  *   accentColor?,
+ *   shareUrl?: string,
  * }
  */
 export async function renderTeamCard(data) {
@@ -363,7 +372,7 @@ export async function renderTeamCard(data) {
   }
 
   cy += 8;
-  drawBranding(ctx, cy);
+  drawBranding(ctx, cy, data.shareUrl);
 
   return canvas;
 }
@@ -379,6 +388,7 @@ export async function renderTeamCard(data) {
  *   hits, total, hitPct,
  *   seasonAvg?,
  *   accentColor?,
+ *   shareUrl?: string,
  * }
  */
 export async function renderLineCard(data) {
@@ -399,7 +409,8 @@ export async function renderLineCard(data) {
   h += 10;               // gap
   h += gameRows * 42;    // game dots
   h += 8;                // gap
-  h += 16;               // branding footer
+  h += 14;               // season avg line
+  h += 16;               // branding + url footer
   h += PAD;
 
   const { canvas, ctx } = createCanvas(CARD_W, h);
@@ -483,12 +494,13 @@ export async function renderLineCard(data) {
 
   // footer
   drawLine(ctx, PAD, cy - 4, CARD_W - PAD, cy - 4, "rgba(255,255,255,0.04)");
-  drawText(ctx, "STATLINE", PAD, cy, { font: `700 10px ${FONT}`, color: BRAND });
   if (data.seasonAvg != null) {
-    drawText(ctx, `Season avg: ${fmt(data.seasonAvg)} PPG`, CARD_W - PAD, cy, {
-      font: `400 10px ${FONT}`, color: MUTED, align: "right",
+    drawText(ctx, `Season avg: ${fmt(data.seasonAvg)} PPG`, PAD, cy, {
+      font: `400 10px ${FONT}`, color: MUTED,
     });
+    cy += 14;
   }
+  drawBranding(ctx, cy, data.shareUrl);
 
   return canvas;
 }
@@ -501,6 +513,7 @@ export async function renderLineCard(data) {
  *   stats: [{ label, v1, v2, higherBetter? }],
  *   p1Wins, p2Wins,
  *   accentColor?,
+ *   shareUrl?: string,
  * }
  */
 export async function renderCompareCard(data) {
@@ -515,7 +528,8 @@ export async function renderCompareCard(data) {
   h += 10;                       // gap
   h += data.stats.length * rowH; // stat rows
   h += 14;                       // gap
-  h += 16;                       // footer
+  h += 14;                       // GP line
+  h += 16;                       // branding + url footer
   h += PAD;
 
   const { canvas, ctx } = createCanvas(CARD_W, h);
@@ -586,14 +600,15 @@ export async function renderCompareCard(data) {
   cy += data.stats.length * rowH + 14;
 
   // footer
-  drawText(ctx, "STATLINE", PAD, cy, { font: `700 10px ${FONT}`, color: BRAND });
   const gpText = [
     data.p1.gamesPlayed != null ? `${data.p1.gamesPlayed} GP` : null,
     data.p2.gamesPlayed != null ? `${data.p2.gamesPlayed} GP` : null,
   ].filter(Boolean).join(" vs ");
   if (gpText) {
-    drawText(ctx, gpText, CARD_W - PAD, cy, { font: `400 10px ${FONT}`, color: MUTED, align: "right" });
+    drawText(ctx, gpText, PAD, cy, { font: `400 10px ${FONT}`, color: MUTED });
+    cy += 14;
   }
+  drawBranding(ctx, cy, data.shareUrl);
 
   return canvas;
 }
