@@ -523,13 +523,17 @@ export async function renderCompareCard(data) {
   ]);
 
   const rowH = 28;
+  // Header: headshots on each side, names below them (stacked vertically)
+  // This gives names the full half-card width instead of squeezing beside headshots
+  const headerH = 110; // headshot row + name + team + win count
+
   let h = PAD;
-  h += 70;                       // header (names, headshots, win counts)
-  h += 10;                       // gap
-  h += data.stats.length * rowH; // stat rows
-  h += 14;                       // gap
-  h += 14;                       // GP line
-  h += 16;                       // branding + url footer
+  h += headerH;                    // header
+  h += 10;                         // gap
+  h += data.stats.length * rowH;   // stat rows
+  h += 14;                         // gap
+  h += 14;                         // GP line
+  h += 16;                         // branding + url footer
   h += PAD;
 
   const { canvas, ctx } = createCanvas(CARD_W, h);
@@ -539,43 +543,52 @@ export async function renderCompareCard(data) {
   strokeRoundRect(ctx, 0, 0, CARD_W, h, 14, CARD_BORDER);
 
   const mid = CARD_W / 2;
+  const halfW = mid - PAD - 10; // available width for each player's name
   let cy = PAD;
 
-  // ── player 1 (left) ──
-  const imgR = 20;
-  const p1ImgX = mid - 50;
-  if (h1) drawCircleImg(ctx, h1, p1ImgX, cy + imgR, imgR);
-  drawText(ctx, data.p1.name, p1ImgX - imgR - 8, cy + 4, {
-    font: `700 13px ${FONT}`, color: WHITE, align: "right", maxWidth: mid - 80,
+  // ── headshot row ──
+  const imgR = 24;
+  const p1CenterX = PAD + halfW / 2;
+  const p2CenterX = mid + 10 + halfW / 2;
+
+  if (h1) drawCircleImg(ctx, h1, p1CenterX, cy + imgR, imgR);
+  if (h2) drawCircleImg(ctx, h2, p2CenterX, cy + imgR, imgR);
+
+  // VS badge between headshots
+  drawText(ctx, "VS", mid, cy + imgR - 6, { font: `900 12px ${FONT}`, color: ACCENT, align: "center" });
+  drawText(ctx, `${data.stats.length} cats`, mid, cy + imgR + 8, { font: `400 9px ${FONT}`, color: FAINT, align: "center" });
+
+  cy += imgR * 2 + 8;
+
+  // ── names (centered under each headshot, full half-width available) ──
+  drawText(ctx, data.p1.name, p1CenterX, cy, {
+    font: `700 14px ${FONT}`, color: WHITE, align: "center", maxWidth: halfW,
   });
-  drawText(ctx, [data.p1.teamAbbr, data.p1.position].filter(Boolean).join(" · "), p1ImgX - imgR - 8, cy + 22, {
-    font: `400 10px ${FONT}`, color: FAINT, align: "right",
+  drawText(ctx, data.p2.name, p2CenterX, cy, {
+    font: `700 14px ${FONT}`, color: WHITE, align: "center", maxWidth: halfW,
   });
-  // p1 win count
+  cy += 18;
+
+  // ── team + position ──
+  drawText(ctx, [data.p1.teamAbbr, data.p1.position].filter(Boolean).join(" · "), p1CenterX, cy, {
+    font: `400 10px ${FONT}`, color: FAINT, align: "center",
+  });
+  drawText(ctx, [data.p2.teamAbbr, data.p2.position].filter(Boolean).join(" · "), p2CenterX, cy, {
+    font: `400 10px ${FONT}`, color: FAINT, align: "center",
+  });
+  cy += 16;
+
+  // ── win counts ──
   const p1Color = data.p1Wins > data.p2Wins ? GREEN : data.p1Wins < data.p2Wins ? RED : YELLOW;
-  drawText(ctx, String(data.p1Wins), p1ImgX - imgR - 8, cy + 40, {
-    font: `900 22px ${FONT}`, color: p1Color, align: "right",
-  });
-
-  // VS
-  drawText(ctx, "VS", mid, cy + 12, { font: `900 12px ${FONT}`, color: ACCENT, align: "center" });
-  drawText(ctx, `${data.stats.length} cats`, mid, cy + 28, { font: `400 9px ${FONT}`, color: FAINT, align: "center" });
-
-  // ── player 2 (right) ──
-  const p2ImgX = mid + 50;
-  if (h2) drawCircleImg(ctx, h2, p2ImgX, cy + imgR, imgR);
-  drawText(ctx, data.p2.name, p2ImgX + imgR + 8, cy + 4, {
-    font: `700 13px ${FONT}`, color: WHITE, maxWidth: mid - 80,
-  });
-  drawText(ctx, [data.p2.teamAbbr, data.p2.position].filter(Boolean).join(" · "), p2ImgX + imgR + 8, cy + 22, {
-    font: `400 10px ${FONT}`, color: FAINT,
-  });
   const p2Color = data.p2Wins > data.p1Wins ? GREEN : data.p2Wins < data.p1Wins ? RED : YELLOW;
-  drawText(ctx, String(data.p2Wins), p2ImgX + imgR + 8, cy + 40, {
-    font: `900 22px ${FONT}`, color: p2Color,
+  drawText(ctx, String(data.p1Wins), p1CenterX, cy, {
+    font: `900 24px ${FONT}`, color: p1Color, align: "center",
+  });
+  drawText(ctx, String(data.p2Wins), p2CenterX, cy, {
+    font: `900 24px ${FONT}`, color: p2Color, align: "center",
   });
 
-  cy += 70 + 10;
+  cy = PAD + headerH + 10;
 
   // ── stat rows ──
   data.stats.forEach((st, i) => {
