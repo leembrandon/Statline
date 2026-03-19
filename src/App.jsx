@@ -49,33 +49,133 @@ function formatGameDate(dateStr) {
   } catch { return ""; }
 }
 
-/* share helper — generates an image from a ref */
+/* ─── CRISP IMAGE CAPTURE ───
+ * Uses SVG foreignObject approach for pixel-perfect DOM screenshots.
+ * This avoids html2canvas distortions by serializing actual DOM/CSS
+ * into an SVG, then rasterizing at high DPI via native canvas.
+ */
+
+// Inline all computed styles onto each element so the SVG snapshot is self-contained
+function inlineStyles(source, target) {
+  const computed = window.getComputedStyle(source);
+  for (let i = 0; i < computed.length; i++) {
+    const prop = computed[i];
+    target.style.setProperty(prop, computed.getPropertyValue(prop));
+  }
+  // recurse children
+  for (let i = 0; i < source.children.length; i++) {
+    if (target.children[i]) inlineStyles(source.children[i], target.children[i]);
+  }
+}
+
+// Convert images to base64 data URIs so they render inside the SVG
+async function convertImagesToDataURI(clone) {
+  const imgs = clone.querySelectorAll("img");
+  const promises = Array.from(imgs).map(async (img) => {
+    if (!img.src || img.src.startsWith("data:")) return;
+    try {
+      const resp = await fetch(img.src, { mode: "cors" });
+      const blob = await resp.blob();
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+      img.setAttribute("src", dataUrl);
+    } catch {
+      // If CORS fails, remove the image to avoid broken rendering
+      img.style.display = "none";
+    }
+  });
+  await Promise.all(promises);
+}
+
+// Main capture function: DOM → high-res PNG blob
+async function captureElement(element, { scale = 3, backgroundColor = "#08080f" } = {}) {
+  const rect = element.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+
+  // Deep-clone the node
+  const clone = element.cloneNode(true);
+  clone.style.position = "absolute";
+  clone.style.left = "-9999px";
+  clone.style.top = "0";
+  clone.style.width = width + "px";
+  clone.style.margin = "0";
+  document.body.appendChild(clone);
+
+  // Inline all computed styles so the SVG is self-contained
+  inlineStyles(element, clone);
+
+  // Convert cross-origin images to data URIs
+  await convertImagesToDataURI(clone);
+
+  // Remove the temporary clone from DOM and serialize
+  document.body.removeChild(clone);
+  const serializer = new XMLSerializer();
+  const htmlStr = serializer.serializeToString(clone);
+
+  // Build the SVG with foreignObject
+  const svgStr = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+      <foreignObject width="100%" height="100%">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="background:${backgroundColor};width:${width}px;height:${height}px;overflow:hidden;">
+          ${htmlStr}
+        </div>
+      </foreignObject>
+    </svg>`;
+
+  // Render SVG to canvas at high DPI for crisp output
+  const canvas = document.createElement("canvas");
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+
+  const img = new Image();
+  const svgBlob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(svgBlob);
+
+  return new Promise((resolve, reject) => {
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((blob) => {
+        if (blob) resolve({ blob, canvas });
+        else reject(new Error("Canvas toBlob failed"));
+      }, "image/png");
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("SVG image load failed"));
+    };
+    img.src = url;
+  });
+}
+
+/* share helper — generates a crisp image from a ref */
 function useShareImage() {
   const [sharing, setSharing] = useState(false);
-  const share = useCallback((ref, filename) => {
+  const share = useCallback(async (ref, filename) => {
     if (!ref.current || sharing) return;
     setSharing(true);
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-    script.onload = () => {
-      window.html2canvas(ref.current, { backgroundColor: "#08080f", scale: 2, useCORS: true }).then((canvas) => {
-        canvas.toBlob((blob) => {
-          if (!blob) { setSharing(false); return; }
-          const file = new File([blob], filename + ".png", { type: "image/png" });
-          if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-            navigator.share({ files: [file], title: filename }).catch(() => {}).finally(() => setSharing(false));
-          } else {
-            const link = document.createElement("a");
-            link.download = filename + ".png";
-            link.href = canvas.toDataURL("image/png");
-            link.click();
-            setSharing(false);
-          }
-        }, "image/png");
-      }).catch(() => setSharing(false));
-    };
-    script.onerror = () => setSharing(false);
-    document.head.appendChild(script);
+    try {
+      const { blob, canvas } = await captureElement(ref.current, { scale: 3, backgroundColor: "#08080f" });
+      const file = new File([blob], filename + ".png", { type: "image/png" });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename }).catch(() => {});
+      } else {
+        const link = document.createElement("a");
+        link.download = filename + ".png";
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+      }
+    } catch (err) {
+      console.error("Share capture failed:", err);
+    } finally {
+      setSharing(false);
+    }
   }, [sharing]);
   return { sharing, share };
 }
@@ -1059,6 +1159,7 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
 /* ── Line Share Buttons (image + link) ── */
 function LineShareButtons({ cardRef, sharing, share, player, direction, threshNum, stat, statOptions, range }) {
   const [linkCopied, setLinkCopied] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
 
   const buildUrl = () => {
     const params = new URLSearchParams();
@@ -1066,38 +1167,33 @@ function LineShareButtons({ cardRef, sharing, share, player, direction, threshNu
     return window.location.origin + window.location.pathname + "?" + params.toString();
   };
 
-  const handleShareImage = () => {
-    if (!cardRef.current || sharing) return;
+  const handleShareImage = async () => {
+    if (!cardRef.current || isSharing) return;
+    setIsSharing(true);
     const url = buildUrl();
     const filename = `statline-${player?.name?.replace(/\s+/g, "-") || "line"}-${direction}-${threshNum}-${statOptions.find((s) => s.key === stat)?.short || stat}`;
 
-    // Use the share helper but override to include URL
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-    script.onload = () => {
-      window.html2canvas(cardRef.current, { backgroundColor: "#08080f", scale: 2, useCORS: true }).then((canvas) => {
-        canvas.toBlob((blob) => {
-          if (!blob) return;
-          const file = new File([blob], filename + ".png", { type: "image/png" });
-          if (navigator.share && navigator.canShare) {
-            const shareData = { files: [file], title: `${player?.name} ${direction} ${threshNum} ${statOptions.find((s) => s.key === stat)?.label || stat}`, url: url };
-            if (navigator.canShare(shareData)) {
-              navigator.share(shareData).catch(() => {});
-            } else {
-              // Fallback: share without files
-              navigator.share({ title: shareData.title, url: url }).catch(() => {});
-            }
-          } else {
-            // Desktop: download image
-            const link = document.createElement("a");
-            link.download = filename + ".png";
-            link.href = canvas.toDataURL("image/png");
-            link.click();
-          }
-        }, "image/png");
-      });
-    };
-    document.head.appendChild(script);
+    try {
+      const { blob, canvas } = await captureElement(cardRef.current, { scale: 3, backgroundColor: "#08080f" });
+      const file = new File([blob], filename + ".png", { type: "image/png" });
+      if (navigator.share && navigator.canShare) {
+        const shareData = { files: [file], title: `${player?.name} ${direction} ${threshNum} ${statOptions.find((s) => s.key === stat)?.label || stat}`, url: url };
+        if (navigator.canShare(shareData)) {
+          await navigator.share(shareData).catch(() => {});
+        } else {
+          await navigator.share({ title: shareData.title, url: url }).catch(() => {});
+        }
+      } else {
+        const link = document.createElement("a");
+        link.download = filename + ".png";
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+      }
+    } catch (err) {
+      console.error("Share capture failed:", err);
+    } finally {
+      setIsSharing(false);
+    }
   };
 
   const handleCopyLink = () => {
@@ -1110,8 +1206,8 @@ function LineShareButtons({ cardRef, sharing, share, player, direction, threshNu
 
   return (
     <div className="flex justify-center gap-2 mb-2">
-      <button onClick={handleShareImage} disabled={sharing} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: sharing ? "rgba(233,69,96,0.2)" : "#e94560", color: "#fff", opacity: sharing ? 0.6 : 1 }}>
-        {sharing ? "Generating..." : "📤 Share"}
+      <button onClick={handleShareImage} disabled={isSharing} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: isSharing ? "rgba(233,69,96,0.2)" : "#e94560", color: "#fff", opacity: isSharing ? 0.6 : 1 }}>
+        {isSharing ? "Generating..." : "📤 Share"}
       </button>
       <button onClick={handleCopyLink} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.06)", color: linkCopied ? "#52b788" : "#888" }}>
         {linkCopied ? "✓ Copied!" : "🔗 Copy link"}
