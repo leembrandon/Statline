@@ -49,134 +49,137 @@ function formatGameDate(dateStr) {
   } catch { return ""; }
 }
 
-/* ─── CRISP IMAGE CAPTURE ───
- * Uses SVG foreignObject approach for pixel-perfect DOM screenshots.
- * This avoids html2canvas distortions by serializing actual DOM/CSS
- * into an SVG, then rasterizing at high DPI via native canvas.
- */
-
-// Inline all computed styles onto each element so the SVG snapshot is self-contained
-function inlineStyles(source, target) {
-  const computed = window.getComputedStyle(source);
-  for (let i = 0; i < computed.length; i++) {
-    const prop = computed[i];
-    target.style.setProperty(prop, computed.getPropertyValue(prop));
-  }
-  // recurse children
-  for (let i = 0; i < source.children.length; i++) {
-    if (target.children[i]) inlineStyles(source.children[i], target.children[i]);
-  }
-}
-
-// Convert images to base64 data URIs so they render inside the SVG
-async function convertImagesToDataURI(clone) {
-  const imgs = clone.querySelectorAll("img");
-  const promises = Array.from(imgs).map(async (img) => {
-    if (!img.src || img.src.startsWith("data:")) return;
-    try {
-      const resp = await fetch(img.src, { mode: "cors" });
-      const blob = await resp.blob();
-      const dataUrl = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-      img.setAttribute("src", dataUrl);
-    } catch {
-      // If CORS fails, remove the image to avoid broken rendering
-      img.style.display = "none";
-    }
-  });
-  await Promise.all(promises);
-}
-
-// Main capture function: DOM → high-res PNG blob
-async function captureElement(element, { scale = 3, backgroundColor = "#08080f" } = {}) {
-  const rect = element.getBoundingClientRect();
-  const width = rect.width;
-  const height = rect.height;
-
-  // Deep-clone the node
-  const clone = element.cloneNode(true);
-  clone.style.position = "absolute";
-  clone.style.left = "-9999px";
-  clone.style.top = "0";
-  clone.style.width = width + "px";
-  clone.style.margin = "0";
-  document.body.appendChild(clone);
-
-  // Inline all computed styles so the SVG is self-contained
-  inlineStyles(element, clone);
-
-  // Convert cross-origin images to data URIs
-  await convertImagesToDataURI(clone);
-
-  // Remove the temporary clone from DOM and serialize
-  document.body.removeChild(clone);
-  const serializer = new XMLSerializer();
-  const htmlStr = serializer.serializeToString(clone);
-
-  // Build the SVG with foreignObject
-  const svgStr = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-      <foreignObject width="100%" height="100%">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="background:${backgroundColor};width:${width}px;height:${height}px;overflow:hidden;">
-          ${htmlStr}
-        </div>
-      </foreignObject>
-    </svg>`;
-
-  // Render SVG to canvas at high DPI for crisp output
-  const canvas = document.createElement("canvas");
-  canvas.width = width * scale;
-  canvas.height = height * scale;
-  const ctx = canvas.getContext("2d");
-  ctx.scale(scale, scale);
-
-  const img = new Image();
-  const svgBlob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(svgBlob);
-
-  return new Promise((resolve, reject) => {
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      canvas.toBlob((blob) => {
-        if (blob) resolve({ blob, canvas });
-        else reject(new Error("Canvas toBlob failed"));
-      }, "image/png");
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("SVG image load failed"));
-    };
-    img.src = url;
-  });
-}
-
-/* share helper — generates a crisp image from a ref */
+/* ─── SHARE HELPER (FIXED FOR CRISP IMAGES) ─── */
 function useShareImage() {
   const [sharing, setSharing] = useState(false);
+  const html2canvasLoaded = useRef(false);
+
+  const loadHtml2Canvas = useCallback(() => {
+    return new Promise((resolve, reject) => {
+      if (html2canvasLoaded.current && window.html2canvas) {
+        resolve(window.html2canvas);
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+      script.onload = () => {
+        html2canvasLoaded.current = true;
+        resolve(window.html2canvas);
+      };
+      script.onerror = () => reject(new Error("Failed to load html2canvas"));
+      document.head.appendChild(script);
+    });
+  }, []);
+
   const share = useCallback(async (ref, filename) => {
     if (!ref.current || sharing) return;
     setSharing(true);
+
     try {
-      const { blob, canvas } = await captureElement(ref.current, { scale: 3, backgroundColor: "#08080f" });
+      const html2canvas = await loadHtml2Canvas();
+      const el = ref.current;
+
+      /* Pre-capture: convert all cross-origin images to inline base64
+         so html2canvas doesn't choke on CORS or render blurry placeholders */
+      const images = el.querySelectorAll("img");
+      const origSrcs = new Map();
+
+      await Promise.all(
+        Array.from(images).map(async (img) => {
+          if (!img.src || img.src.startsWith("data:")) return;
+          try {
+            const resp = await fetch(img.src, { mode: "cors" });
+            const blob = await resp.blob();
+            const dataUrl = await new Promise((res) => {
+              const reader = new FileReader();
+              reader.onloadend = () => res(reader.result);
+              reader.readAsDataURL(blob);
+            });
+            origSrcs.set(img, img.src);
+            img.src = dataUrl;
+          } catch {
+            /* If CORS fails, leave the original src — html2canvas will try useCORS */
+          }
+        })
+      );
+
+      const canvas = await html2canvas(el, {
+        backgroundColor: "#08080f",
+        scale: 3, /* 3x for retina-crisp output */
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        /* Fix distortion: force a consistent pixel width */
+        width: el.scrollWidth,
+        height: el.scrollHeight,
+        /* Clone handler: normalize CSS that html2canvas can't render */
+        onclone: (_doc, clonedEl) => {
+          /* Set explicit dimensions so nothing collapses */
+          clonedEl.style.width = el.scrollWidth + "px";
+          clonedEl.style.height = "auto";
+          clonedEl.style.overflow = "visible";
+
+          /* Fix all images inside the clone */
+          const clonedImages = clonedEl.querySelectorAll("img");
+          clonedImages.forEach((img) => {
+            /* Remove object-fit — html2canvas doesn't support it properly */
+            img.style.objectFit = "initial";
+            /* Remove border-radius — html2canvas renders these blurry/clipped wrong */
+            img.style.borderRadius = "0";
+            /* Ensure images have explicit sizing */
+            const rect = img.getBoundingClientRect
+              ? { width: img.offsetWidth, height: img.offsetHeight }
+              : { width: 32, height: 32 };
+            if (!img.style.width) img.style.width = rect.width + "px";
+            if (!img.style.height) img.style.height = rect.height + "px";
+            /* Prevent blurry downscaling */
+            img.style.imageRendering = "auto";
+          });
+
+          /* Remove backdrop-filter (not supported) */
+          clonedEl.style.backdropFilter = "none";
+          clonedEl.style.webkitBackdropFilter = "none";
+
+          /* Fix truncated text — ensure it's visible in capture */
+          const truncated = clonedEl.querySelectorAll(".truncate, [class*='truncate']");
+          truncated.forEach((node) => {
+            node.style.overflow = "visible";
+            node.style.textOverflow = "clip";
+            node.style.whiteSpace = "normal";
+          });
+
+          /* Remove any animate classes that can cause mid-frame captures */
+          const animated = clonedEl.querySelectorAll("[class*='animate-']");
+          animated.forEach((node) => {
+            node.style.animation = "none";
+          });
+        },
+      });
+
+      /* Restore original image srcs */
+      origSrcs.forEach((src, img) => { img.src = src; });
+
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+      if (!blob) { setSharing(false); return; }
+
       const file = new File([blob], filename + ".png", { type: "image/png" });
+
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: filename }).catch(() => {});
       } else {
         const link = document.createElement("a");
         link.download = filename + ".png";
-        link.href = canvas.toDataURL("image/png");
+        link.href = URL.createObjectURL(blob);
         link.click();
+        URL.revokeObjectURL(link.href);
       }
     } catch (err) {
       console.error("Share capture failed:", err);
     } finally {
       setSharing(false);
     }
-  }, [sharing]);
+  }, [sharing, loadHtml2Canvas]);
+
   return { sharing, share };
 }
 
@@ -570,8 +573,7 @@ function ScheduleView({ upcomingGames, teamMap, standingsMap, onTeamClick }) {
 function PlayoffRace({ standings, teamMap, onTeamClick }) {
   if (!standings.length) return null;
 
-  // Get the top team's pct for games back calculation context
-  const getStatus = (rank, pct, gamesBack) => {
+  const getStatus = (rank) => {
     if (rank <= 6) return { label: "Playoff", color: "#e94560", bg: "rgba(233,69,96,0.1)" };
     if (rank <= 10) return { label: "Play-in", color: "#ffd166", bg: "rgba(255,209,102,0.1)" };
     return { label: "Out", color: "#ff6b6b", bg: "rgba(255,107,107,0.08)" };
@@ -585,7 +587,7 @@ function PlayoffRace({ standings, teamMap, onTeamClick }) {
       {standings.slice(0, 12).map((s, i) => {
         const t = teamMap[s.team_id] || {};
         const rank = s.conference_rank || i + 1;
-        const status = getStatus(rank, s.pct, s.games_back);
+        const status = getStatus(rank);
         const pctVal = s.pct != null ? Number(s.pct) : 0;
         const barWidth = Math.max(pctVal * 100, 5);
 
@@ -598,14 +600,12 @@ function PlayoffRace({ standings, teamMap, onTeamClick }) {
               <span className="text-xs font-semibold tabular-nums" style={{ color: "#aaa" }}>{s.wins}-{s.losses}</span>
               <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: status.bg, color: status.color, fontSize: "9px" }}>{status.label}</span>
             </div>
-            {/* Win % bar */}
             <div className="ml-6 flex items-center gap-2">
               <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.04)" }}>
                 <div className="h-full rounded-full transition-all" style={{ width: `${barWidth}%`, background: status.color, opacity: 0.6 }} />
               </div>
               <span className="text-xs tabular-nums" style={{ color: "#555", minWidth: "32px", textAlign: "right" }}>{fmt(s.pct, 3)}</span>
             </div>
-            {/* Divider lines between sections */}
             {(rank === 6 || rank === 10) && <div className="mt-2 border-t border-dashed" style={{ borderColor: rank === 6 ? "rgba(233,69,96,0.3)" : "rgba(255,209,102,0.3)" }} />}
           </div>
         );
@@ -660,7 +660,6 @@ function StandingsView({ east, west, teamMap, standings, onTeamClick }) {
 
   return (
     <div className="space-y-4">
-      {/* Toggle */}
       <div className="flex gap-1.5 mb-2">
         {[{ key: "standings", label: "Standings" }, { key: "playoff", label: "Playoff race" }].map((v) => (
           <button key={v.key} onClick={() => setView(v.key)} className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all" style={{
@@ -702,7 +701,6 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
   const cardRef = useRef(null);
   const { sharing, share } = useShareImage();
 
-  // Head-to-head season series — calculate from allGames
   const h2h = useMemo(() => {
     const teamGames = allGames.filter((g) => g.status === "final" && (g.home_team_id === teamId || g.away_team_id === teamId));
     const opponents = {};
@@ -716,7 +714,6 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
       if (teamScore > oppScore) opponents[oppId].wins++;
       else opponents[oppId].losses++;
     });
-    // Only show opponents played more than once (series)
     return Object.entries(opponents)
       .filter(([, v]) => v.games >= 2)
       .sort((a, b) => b[1].games - a[1].games)
@@ -754,7 +751,6 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
         <ShareButton onClick={() => share(cardRef, `statline-${team.abbreviation}`)} sharing={sharing} label="📤 Share team card" />
       </div>
 
-      {/* Upcoming games */}
       {upcoming.length > 0 && (
         <div className="mb-6">
           <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#4a90d9" }}>Upcoming</div>
@@ -777,7 +773,6 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
         </div>
       )}
 
-      {/* Head-to-head season series */}
       {h2h.length > 0 && (
         <div className="mb-6">
           <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Season series</div>
@@ -805,7 +800,6 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
         </div>
       )}
 
-      {/* Roster */}
       <div className="mb-6">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Roster · {roster.length} players</div>
         {roster.length > 0 ? (
@@ -828,7 +822,6 @@ function TeamPage({ teamId, teamMap, standings, playerStats, games, allGames, up
         ) : <p className="text-xs" style={{ color: "#555" }}>No roster data available</p>}
       </div>
 
-      {/* Recent games */}
       <div>
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent games</div>
         {recentGames.length > 0 ? recentGames.map((g) => {
@@ -1081,7 +1074,6 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
 
   return (
     <div>
-      {/* Controls */}
       <div className="rounded-xl p-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex flex-wrap gap-1.5 mb-3">
           {statOptions.map((s) => (
@@ -1105,11 +1097,9 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
         </div>
       </div>
 
-      {/* Result card (shareable — includes player info) */}
       {hasThreshold && (
         <div>
           <div ref={cardRef} className="rounded-xl p-4 mb-2" style={{ background: hitPct >= 60 ? "rgba(82,183,136,0.06)" : hitPct >= 40 ? "rgba(255,209,102,0.06)" : "rgba(255,107,107,0.06)", border: `1px solid ${hitPct >= 60 ? "rgba(82,183,136,0.15)" : hitPct >= 40 ? "rgba(255,209,102,0.15)" : "rgba(255,107,107,0.15)"}` }}>
-            {/* Player info header inside shareable area */}
             {player && (
               <div className="flex items-center gap-3 mb-3 pb-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                 {player.headshot_url && <img src={player.headshot_url} alt="" className="w-10 h-10 rounded-full object-cover" />}
@@ -1159,7 +1149,6 @@ function LineCheck({ playerId, player, teamMap, initialStat, initialDirection, i
 /* ── Line Share Buttons (image + link) ── */
 function LineShareButtons({ cardRef, sharing, share, player, direction, threshNum, stat, statOptions, range }) {
   const [linkCopied, setLinkCopied] = useState(false);
-  const [isSharing, setIsSharing] = useState(false);
 
   const buildUrl = () => {
     const params = new URLSearchParams();
@@ -1167,33 +1156,9 @@ function LineShareButtons({ cardRef, sharing, share, player, direction, threshNu
     return window.location.origin + window.location.pathname + "?" + params.toString();
   };
 
-  const handleShareImage = async () => {
-    if (!cardRef.current || isSharing) return;
-    setIsSharing(true);
-    const url = buildUrl();
+  const handleShareImage = () => {
     const filename = `statline-${player?.name?.replace(/\s+/g, "-") || "line"}-${direction}-${threshNum}-${statOptions.find((s) => s.key === stat)?.short || stat}`;
-
-    try {
-      const { blob, canvas } = await captureElement(cardRef.current, { scale: 3, backgroundColor: "#08080f" });
-      const file = new File([blob], filename + ".png", { type: "image/png" });
-      if (navigator.share && navigator.canShare) {
-        const shareData = { files: [file], title: `${player?.name} ${direction} ${threshNum} ${statOptions.find((s) => s.key === stat)?.label || stat}`, url: url };
-        if (navigator.canShare(shareData)) {
-          await navigator.share(shareData).catch(() => {});
-        } else {
-          await navigator.share({ title: shareData.title, url: url }).catch(() => {});
-        }
-      } else {
-        const link = document.createElement("a");
-        link.download = filename + ".png";
-        link.href = canvas.toDataURL("image/png");
-        link.click();
-      }
-    } catch (err) {
-      console.error("Share capture failed:", err);
-    } finally {
-      setIsSharing(false);
-    }
+    share(cardRef, filename);
   };
 
   const handleCopyLink = () => {
@@ -1206,8 +1171,8 @@ function LineShareButtons({ cardRef, sharing, share, player, direction, threshNu
 
   return (
     <div className="flex justify-center gap-2 mb-2">
-      <button onClick={handleShareImage} disabled={isSharing} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: isSharing ? "rgba(233,69,96,0.2)" : "#e94560", color: "#fff", opacity: isSharing ? 0.6 : 1 }}>
-        {isSharing ? "Generating..." : "📤 Share"}
+      <button onClick={handleShareImage} disabled={sharing} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: sharing ? "rgba(233,69,96,0.2)" : "#e94560", color: "#fff", opacity: sharing ? 0.6 : 1 }}>
+        {sharing ? "Generating..." : "📤 Share"}
       </button>
       <button onClick={handleCopyLink} className="px-4 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.06)", color: linkCopied ? "#52b788" : "#888" }}>
         {linkCopied ? "✓ Copied!" : "🔗 Copy link"}
@@ -1274,13 +1239,11 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
         <ShareButton onClick={() => share(cardRef, `statline-${player.name?.replace(/\s+/g, "-")}`)} sharing={sharing} label="📤 Share player card" />
       </div>
 
-      {/* Line Check Tool */}
       <div className="mb-6">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#52b788" }}>Line check</div>
         <LineCheck playerId={pid} player={player} teamMap={teamMap} />
       </div>
 
-      {/* Recent Form & Game Log */}
       <div className="mb-4">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent form & game log</div>
         <PlayerGameLogUI playerId={pid} teamMap={teamMap} />
@@ -1295,7 +1258,6 @@ function LinesTab({ playerStats, teamMap }) {
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [urlLineParams, setUrlLineParams] = useState(null);
 
-  // Read ?line= URL parameter on mount
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -1333,7 +1295,6 @@ function LinesTab({ playerStats, teamMap }) {
           </div>
           <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search player..." className="w-full p-3 rounded-xl text-white placeholder-gray-600 outline-none mb-3" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", fontSize: "16px" }} />
           
-          {/* Search results */}
           {results.length > 0 && (
             <div className="space-y-1">
               {results.map((p, i) => {
@@ -1355,7 +1316,6 @@ function LinesTab({ playerStats, teamMap }) {
             </div>
           )}
 
-          {/* Popular players when no search */}
           {query.length < 2 && (
             <div>
               <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "#555" }}>Top scorers</div>
@@ -1384,7 +1344,6 @@ function LinesTab({ playerStats, teamMap }) {
         </div>
       ) : (
         <div>
-          {/* Selected player header */}
           <button onClick={() => setSelectedPlayer(null)} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Pick different player</button>
           
           <div className="flex items-center gap-3 p-3 rounded-xl mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1469,7 +1428,6 @@ function CompareView({ playerStats, teamMap }) {
 
   const pick = (setter, qSetter, showSetter) => (p) => {
     setter(p); qSetter(p.name); showSetter(false);
-    // update url after state settles
     setTimeout(() => {
       const np1 = setter === setP1 ? p : p1;
       const np2 = setter === setP2 ? p : p2;
@@ -1629,7 +1587,6 @@ export default function App() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Keyboard shortcut: Cmd/Ctrl+K to open search
   useEffect(() => {
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -1679,7 +1636,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen" style={{ background: "#08080f", color: "#c8c8d0" }}>
-      {/* Sticky Header */}
       <div className="sticky top-0 z-50 backdrop-blur-xl" style={{ background: "rgba(8,8,15,0.92)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="max-w-3xl mx-auto px-4 pt-3 pb-0">
           <div className="flex items-center justify-between mb-3">
@@ -1717,7 +1673,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Search Overlay */}
       {searchOpen && (
         <SimpleSearch
           playerStats={data.playerStats}
@@ -1729,7 +1684,6 @@ export default function App() {
         />
       )}
 
-      {/* Content */}
       <div className="max-w-3xl mx-auto px-4 py-5">
         {tab === "Scores" && <ScoresView games={data.games} teamMap={data.teamMap} standingsMap={data.standingsMap} playerStats={data.enrichedStats} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
         {tab === "Schedule" && <ScheduleView upcomingGames={data.upcomingGames} teamMap={data.teamMap} standingsMap={data.standingsMap} onTeamClick={handleSelectTeam} />}
