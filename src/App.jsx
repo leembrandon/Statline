@@ -204,565 +204,37 @@ function StatBox({ label, value, highlight }) {
   );
 }
 
-/* ── Smart Search — natural language query engine ── */
-const STAT_KEYS = {
-  points: "points", pts: "points", point: "points",
-  rebounds: "rebounds", reb: "rebounds", rebs: "rebounds", boards: "rebounds",
-  assists: "assists", ast: "assists", dimes: "assists",
-  steals: "steals", stl: "steals",
-  blocks: "blocks", blk: "blocks",
-  turnovers: "turnovers", to: "turnovers", tos: "turnovers",
-  minutes: "minutes", min: "minutes", mins: "minutes",
-  "3pt": "fg3_made", threes: "fg3_made", "three pointers": "fg3_made", "3s": "fg3_made",
-};
-
-const SEASON_STAT_KEYS = {
-  points: "points_per_game", pts: "points_per_game",
-  rebounds: "rebounds_per_game", reb: "rebounds_per_game",
-  assists: "assists_per_game", ast: "assists_per_game",
-  steals: "steals_per_game", stl: "steals_per_game",
-  blocks: "blocks_per_game", blk: "blocks_per_game",
-};
-
-function SmartSearch({ playerStats, enrichedStats, teamMap, standings, games, allGames, onSelectPlayer, onSelectTeam, onNavigateCompare, onClose }) {
+/* ── Search (clean, simple, reliable) ── */
+function SimpleSearch({ playerStats, teamMap, standings, onSelectPlayer, onSelectTeam, onClose }) {
   const [query, setQuery] = useState("");
-  const [smartResult, setSmartResult] = useState(null);
-  const [boxData, setBoxData] = useState(null);
-  const [boxLoading, setBoxLoading] = useState(false);
   const inputRef = useRef(null);
-
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  // Build lookup structures
-  const playersByName = useMemo(() => {
-    const map = {};
-    // Sort by PPG descending so the best player wins name collisions
-    const sorted = [...playerStats].sort((a, b) => (Number(b.points_per_game) || 0) - (Number(a.points_per_game) || 0));
-    sorted.forEach((p) => {
-      if (p.name) {
-        const full = p.name.toLowerCase();
-        // Full name always wins (don't overwrite)
-        if (!map[full]) map[full] = p;
-        const parts = p.name.split(" ");
-        if (parts.length > 1) {
-          // Last name — only set if not already taken by a higher PPG player
-          const last = parts[parts.length - 1].toLowerCase();
-          if (!map[last]) map[last] = p;
-          // First name — only set if not already taken
-          const first = parts[0].toLowerCase();
-          if (!map[first]) map[first] = p;
-        }
-      }
-    });
-    return map;
-  }, [playerStats]);
-
-  const teamsByName = useMemo(() => {
-    const map = {};
-    Object.values(teamMap).forEach((t) => {
-      if (t.name) map[t.name.toLowerCase()] = t;
-      if (t.full_name) map[t.full_name.toLowerCase()] = t;
-      if (t.abbreviation) map[t.abbreviation.toLowerCase()] = t;
-      if (t.city) map[t.city.toLowerCase()] = t;
-      // Common nicknames
-      const nick = (t.name || "").toLowerCase();
-      map[nick] = t;
-    });
-    return map;
-  }, [teamMap]);
-
-  // Find a player in a query string
-  const findPlayer = useCallback((text) => {
-    const lower = text.toLowerCase();
-    // Try full names first (longest match wins)
-    let bestMatch = null;
-    let bestLen = 0;
-    for (const [name, p] of Object.entries(playersByName)) {
-      if (lower.includes(name) && name.length > bestLen && name.split(" ").length > 1) {
-        bestMatch = p;
-        bestLen = name.length;
-      }
-    }
-    if (bestMatch) return bestMatch;
-    // Try single names
-    for (const [name, p] of Object.entries(playersByName)) {
-      if (lower.includes(name) && name.length > bestLen) {
-        bestMatch = p;
-        bestLen = name.length;
-      }
-    }
-    return bestMatch;
-  }, [playersByName]);
-
-  // Find a team in a query string
-  const findTeam = useCallback((text) => {
-    const lower = text.toLowerCase();
-    let bestMatch = null;
-    let bestLen = 0;
-    for (const [name, t] of Object.entries(teamsByName)) {
-      if (lower.includes(name) && name.length > bestLen) {
-        bestMatch = t;
-        bestLen = name.length;
-      }
-    }
-    return bestMatch;
-  }, [teamsByName]);
-
-  // Find second player (excluding first)
-  const findSecondPlayer = useCallback((text, first) => {
-    if (!first?.name) return null;
-    // Remove first player's name from the query to avoid re-matching
-    let lower = text.toLowerCase();
-    const firstName = first.name.toLowerCase();
-    lower = lower.replace(firstName, "").trim();
-    // Also try removing just last name
-    const firstParts = first.name.split(" ");
-    if (firstParts.length > 1) {
-      lower = lower.replace(firstParts[firstParts.length - 1].toLowerCase(), "").trim();
-    }
-    // Now search in what remains
-    let bestMatch = null;
-    let bestLen = 0;
-    for (const [name, p] of Object.entries(playersByName)) {
-      if (p.name?.toLowerCase() === firstName) continue;
-      if (lower.includes(name) && name.length > bestLen) {
-        bestMatch = p;
-        bestLen = name.length;
-      }
-    }
-    return bestMatch;
-  }, [playersByName]);
-
-  // Find team excluding a player's team
-  const findOpponentTeam = useCallback((text, playerTeamId) => {
-    const lower = text.toLowerCase();
-    let bestMatch = null;
-    let bestLen = 0;
-    for (const [name, t] of Object.entries(teamsByName)) {
-      if (t.id === playerTeamId) continue;
-      if (lower.includes(name) && name.length > bestLen) {
-        bestMatch = t;
-        bestLen = name.length;
-      }
-    }
-    return bestMatch;
-  }, [teamsByName]);
-
-  // Parse query into structured intent
-  const parseQuery = useCallback((q) => {
-    if (q.length < 2) return null;
-    const lower = q.toLowerCase().trim();
-    const tokens = lower.split(/\s+/);
-
-    // Extract numbers — strip +, -, and other symbols
-    const numbers = [];
-    for (const t of tokens) {
-      const cleaned = t.replace(/[^0-9.]/g, "");
-      if (cleaned && !isNaN(Number(cleaned))) numbers.push(Number(cleaned));
-    }
-    const hasVs = lower.includes(" vs ") || lower.includes(" versus ") || lower.includes(" against ");
-    const hasOver = lower.includes("over") || lower.includes("above") || lower.includes("o ");
-    const hasUnder = lower.includes("under") || lower.includes("below") || lower.includes("u ");
-    const hasLast = lower.includes("last ");
-    const hasHome = lower.includes(" home");
-    const hasAway = lower.includes(" away") || lower.includes(" road");
-    const hasCareer = lower.includes("career");
-    const hasWho = lower.startsWith("who ") || lower.startsWith("who's ") || lower.startsWith("whos ") || lower.startsWith("who is ");
-
-    // Extract "last N" value
-    let lastN = null;
-    const lastMatch = lower.match(/last\s*(\d+)/);
-    if (lastMatch) lastN = parseInt(lastMatch[1]);
-    // Also handle L5, L10 shorthand
-    const lMatch = lower.match(/\bl(\d+)\b/);
-    if (lMatch && !lastN) lastN = parseInt(lMatch[1]);
-
-    // Extract stat keyword
-    let statKey = null;
-    for (const [keyword, key] of Object.entries(STAT_KEYS)) {
-      if (lower.includes(keyword)) { statKey = key; break; }
-    }
-
-    // Find entities
-    const player1 = findPlayer(lower);
-    const player2 = player1 ? findSecondPlayer(lower, player1) : null;
-    const team1 = findTeam(lower);
-
-    // Determine intent
-    // 1. Two players → Compare
-    if (player1 && player2 && hasVs) {
-      return { type: "compare", player1, player2 };
-    }
-    if (player1 && player2) {
-      return { type: "compare", player1, player2 };
-    }
-
-    // 2. Player + over/under + number → Line hit rate
-    if (player1 && (hasOver || hasUnder) && numbers.length > 0) {
-      return { type: "line", player: player1, threshold: numbers[0], direction: hasOver ? "over" : "under", stat: statKey || "points", lastN: lastN || 10 };
-    }
-
-    // 3. Player + vs + team → Matchup
-    if (player1 && hasVs) {
-      const oppTeam = findOpponentTeam(lower, player1.team_id);
-      if (oppTeam) return { type: "matchup", player: player1, opponent: oppTeam, lastN };
-    }
-    // Also catch "player against team" without vs
-    if (player1 && team1 && team1.id !== player1.team_id) {
-      return { type: "matchup", player: player1, opponent: team1, lastN };
-    }
-
-    // 4. Player + last N → Recent form
-    if (player1 && lastN) {
-      return { type: "recent", player: player1, lastN, stat: statKey };
-    }
-
-    // 5. Team + last N / home / away → Team form
-    if (team1 && (lastN || hasHome || hasAway)) {
-      return { type: "team_form", team: team1, lastN: lastN || 5, home: hasHome, away: hasAway };
-    }
-
-    // 6. "Who averages 30+ points" → Leaderboard filter
-    if (hasWho && numbers.length > 0) {
-      const seasonKey = statKey ? (SEASON_STAT_KEYS[statKey] || "points_per_game") : "points_per_game";
-      return { type: "leaderboard", stat: seasonKey, threshold: numbers[0], direction: hasUnder ? "under" : "over" };
-    }
-
-    // 7. Just a player name → Player page
-    if (player1) return { type: "player", player: player1 };
-
-    // 8. Just a team name → Team page
-    if (team1) return { type: "team", team: team1 };
-
-    return null;
-  }, [findPlayer, findSecondPlayer, findTeam, findOpponentTeam]);
-
-  // Process query
-  useEffect(() => {
-    const parsed = parseQuery(query);
-    setSmartResult(parsed);
-
-    // Fetch box scores for queries that need them
-    if (parsed && (parsed.type === "line" || parsed.type === "matchup" || parsed.type === "recent")) {
-      const pid = parsed.player?.player_id || parsed.player?.id;
-      if (pid) {
-        setBoxLoading(true);
-        supaFetch("nba_box_scores", `select=*,game:game_id(game_date,home_team_id,away_team_id,home_score,away_score)&player_id=eq.${pid}&order=game->>game_date.desc&limit=30`)
-          .then((data) => setBoxData(data || []))
-          .catch(() => setBoxData([]))
-          .finally(() => setBoxLoading(false));
-      }
-    } else if (parsed && parsed.type === "team_form") {
-      // Fetch team's recent games
-      const tid = parsed.team?.id;
-      if (tid) {
-        setBoxLoading(true);
-        supaFetch("games", `select=*&sport=eq.nba&status=eq.final&or=(home_team_id.eq.${tid},away_team_id.eq.${tid})&order=start_time.desc&limit=20`)
-          .then((data) => setBoxData(data || []))
-          .catch(() => setBoxData([]))
-          .finally(() => setBoxLoading(false));
-      }
-    } else {
-      setBoxData(null);
-    }
-  }, [query, parseQuery]);
-
-  // Fallback: normal search
-  const fallbackResults = useMemo(() => {
-    if (query.length < 2 || smartResult) return { players: [], teams: [] };
+  const results = useMemo(() => {
+    if (query.length < 2) return { players: [], teams: [] };
     const q = query.toLowerCase();
+
     const players = playerStats.filter((p) => {
-      const nameMatch = p.name && p.name.toLowerCase().includes(q);
+      if (!p.name) return false;
+      const nameMatch = p.name.toLowerCase().includes(q);
       const team = teamMap[p.team_id] || {};
-      return nameMatch || (team.name && team.name.toLowerCase().includes(q)) || (team.abbreviation && team.abbreviation.toLowerCase().includes(q));
-    }).slice(0, 8);
+      return nameMatch || (team.abbreviation && team.abbreviation.toLowerCase().includes(q));
+    }).sort((a, b) => (Number(b.points_per_game) || 0) - (Number(a.points_per_game) || 0)).slice(0, 10);
+
     const teamIds = new Set();
     const teams = Object.values(teamMap).filter((t) => {
-      const match = (t.full_name && t.full_name.toLowerCase().includes(q)) || (t.abbreviation && t.abbreviation.toLowerCase().includes(q)) || (t.city && t.city.toLowerCase().includes(q));
+      const match = (t.full_name && t.full_name.toLowerCase().includes(q)) ||
+        (t.abbreviation && t.abbreviation.toLowerCase().includes(q)) ||
+        (t.city && t.city.toLowerCase().includes(q)) ||
+        (t.name && t.name.toLowerCase().includes(q));
       if (match && !teamIds.has(t.id)) { teamIds.add(t.id); return true; }
       return false;
     }).slice(0, 5);
+
     return { players, teams };
-  }, [query, smartResult, playerStats, teamMap]);
+  }, [query, playerStats, teamMap]);
 
-  // Enrich box data with opponent info
-  const enrichedBox = useMemo(() => {
-    if (!boxData || !Array.isArray(boxData)) return [];
-    return boxData.map((b) => {
-      if (b.game) {
-        const isHome = b.team_id === b.game.home_team_id;
-        const oppId = isHome ? b.game.away_team_id : b.game.home_team_id;
-        return { ...b, oppId, opp: teamMap[oppId] || {}, isHome, won: isHome ? b.game.home_score > b.game.away_score : b.game.away_score > b.game.home_score, gameDate: b.game.game_date };
-      }
-      return b;
-    }).filter((b) => b.gameDate);
-  }, [boxData, teamMap]);
-
-  // ─── Render answer cards ───
-  const renderSmartAnswer = () => {
-    if (!smartResult) return null;
-    const sr = smartResult;
-
-    // COMPARE
-    if (sr.type === "compare") {
-      const t1 = teamMap[sr.player1.team_id] || {};
-      const t2 = teamMap[sr.player2.team_id] || {};
-      return (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(233,69,96,0.06)", border: "1px solid rgba(233,69,96,0.15)" }}>
-          <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "#e94560" }}>Head-to-head</div>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              {sr.player1.headshot_url && <img src={sr.player1.headshot_url} alt="" className="w-10 h-10 rounded-full" />}
-              <div><div className="text-sm font-bold text-white">{sr.player1.name}</div><div style={{ fontSize: "10px", color: "#555" }}>{t1.abbreviation}</div></div>
-            </div>
-            <span className="text-xs font-black" style={{ color: "#e94560" }}>VS</span>
-            <div className="flex items-center gap-2">
-              <div className="text-right"><div className="text-sm font-bold text-white">{sr.player2.name}</div><div style={{ fontSize: "10px", color: "#555" }}>{t2.abbreviation}</div></div>
-              {sr.player2.headshot_url && <img src={sr.player2.headshot_url} alt="" className="w-10 h-10 rounded-full" />}
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-2 mb-3">
-            {[["PTS", "points_per_game"], ["REB", "rebounds_per_game"], ["AST", "assists_per_game"]].map(([label, key]) => {
-              const v1 = Number(sr.player1[key]) || 0, v2 = Number(sr.player2[key]) || 0;
-              return (
-                <div key={label} className="text-center">
-                  <div style={{ fontSize: "9px", color: "#555" }}>{label}</div>
-                  <div className="flex items-center justify-center gap-2">
-                    <span className="text-sm font-bold" style={{ color: v1 >= v2 ? "#52b788" : "#888" }}>{fmt(v1)}</span>
-                    <span style={{ fontSize: "9px", color: "#444" }}>-</span>
-                    <span className="text-sm font-bold" style={{ color: v2 >= v1 ? "#52b788" : "#888" }}>{fmt(v2)}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <button onClick={() => { onNavigateCompare(sr.player1, sr.player2); onClose(); }} className="w-full py-2 rounded-lg text-xs font-bold" style={{ background: "#e94560", color: "#fff" }}>Open full comparison</button>
-        </div>
-      );
-    }
-
-    // LINE HIT RATE
-    if (sr.type === "line" && !boxLoading && enrichedBox.length > 0) {
-      const games = enrichedBox.slice(0, sr.lastN);
-      const stat = sr.stat;
-      const hits = games.filter((g) => sr.direction === "over" ? (g[stat] || 0) > sr.threshold : (g[stat] || 0) < sr.threshold);
-      const pct = games.length > 0 ? (hits.length / games.length * 100) : 0;
-      const statLabel = Object.entries(STAT_KEYS).find(([, v]) => v === stat)?.[0]?.toUpperCase() || stat.toUpperCase();
-
-      return (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(82,183,136,0.06)", border: "1px solid rgba(82,183,136,0.15)" }}>
-          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "#52b788" }}>Line check</div>
-          <div className="flex items-center gap-3 mb-3">
-            {sr.player.headshot_url && <img src={sr.player.headshot_url} alt="" className="w-10 h-10 rounded-full" />}
-            <div className="flex-1">
-              <div className="text-sm font-bold text-white">{sr.player.name}</div>
-              <div className="text-xs" style={{ color: "#888" }}>{sr.direction === "over" ? "Over" : "Under"} {sr.threshold} {statLabel} · Last {games.length}</div>
-            </div>
-            <div className="text-right">
-              <div className="text-2xl font-black" style={{ color: pct >= 60 ? "#52b788" : pct >= 40 ? "#ffd166" : "#ff6b6b" }}>{hits.length}/{games.length}</div>
-              <div className="text-xs font-bold" style={{ color: pct >= 60 ? "#52b788" : pct >= 40 ? "#ffd166" : "#ff6b6b" }}>{pct.toFixed(0)}%</div>
-            </div>
-          </div>
-          {/* Hit streak dots */}
-          <div className="flex gap-1 mb-3 flex-wrap">
-            {games.map((g, i) => {
-              const val = g[stat] || 0;
-              const hit = sr.direction === "over" ? val > sr.threshold : val < sr.threshold;
-              return (
-                <div key={i} className="flex flex-col items-center">
-                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: hit ? "rgba(82,183,136,0.2)" : "rgba(255,107,107,0.2)", color: hit ? "#52b788" : "#ff6b6b", fontSize: "9px" }}>{val}</div>
-                  <span style={{ fontSize: "8px", color: "#444" }}>{g.opp?.abbreviation}</span>
-                </div>
-              );
-            })}
-          </div>
-          <button onClick={() => { onSelectPlayer(sr.player); onClose(); }} className="w-full py-2 rounded-lg text-xs font-bold" style={{ background: "rgba(255,255,255,0.06)", color: "#888" }}>View full game log →</button>
-        </div>
-      );
-    }
-
-    // MATCHUP
-    if (sr.type === "matchup" && !boxLoading && enrichedBox.length > 0) {
-      const vsGames = enrichedBox.filter((g) => g.oppId === sr.opponent.id);
-      if (vsGames.length === 0) return <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(255,255,255,0.03)" }}><p className="text-sm text-center" style={{ color: "#555" }}>No games found vs {sr.opponent.full_name}</p></div>;
-      const avg = (key) => vsGames.reduce((s, g) => s + (Number(g[key]) || 0), 0) / vsGames.length;
-
-      return (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(74,144,217,0.06)", border: "1px solid rgba(74,144,217,0.15)" }}>
-          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "#4a90d9" }}>Matchup</div>
-          <div className="flex items-center gap-3 mb-3">
-            {sr.player.headshot_url && <img src={sr.player.headshot_url} alt="" className="w-10 h-10 rounded-full" />}
-            <div className="flex-1">
-              <div className="text-sm font-bold text-white">{sr.player.name}</div>
-              <div className="text-xs" style={{ color: "#888" }}>vs {sr.opponent.full_name} · {vsGames.length} games</div>
-            </div>
-            {sr.opponent.logo_url && <img src={sr.opponent.logo_url} alt="" className="w-10 h-10" />}
-          </div>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
-            {[["PTS", "points"], ["REB", "rebounds"], ["AST", "assists"], ["STL", "steals"], ["BLK", "blocks"], ["MIN", "minutes"]].map(([label, key]) => (
-              <div key={label} className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>{label}</div><div className="text-sm font-bold text-white">{avg(key).toFixed(1)}</div></div>
-            ))}
-          </div>
-          {/* Game-by-game */}
-          {vsGames.map((g, i) => (
-            <div key={i} className="flex items-center gap-2 py-1.5" style={{ borderTop: "1px solid rgba(255,255,255,0.03)" }}>
-              <span style={{ fontSize: "10px", color: "#555" }}>{g.gameDate ? new Date(g.gameDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}</span>
-              <span className="text-xs font-bold px-1 rounded" style={{ background: g.won ? "rgba(82,183,136,0.12)" : "rgba(255,107,107,0.12)", color: g.won ? "#52b788" : "#ff6b6b", fontSize: "9px" }}>{g.won ? "W" : "L"}</span>
-              <span className="flex-1" />
-              <span className="text-xs font-bold text-white tabular-nums">{g.points} pts</span>
-              <span className="text-xs tabular-nums" style={{ color: "#888" }}>{g.rebounds} reb</span>
-              <span className="text-xs tabular-nums" style={{ color: "#888" }}>{g.assists} ast</span>
-            </div>
-          ))}
-          <button onClick={() => { onSelectPlayer(sr.player); onClose(); }} className="w-full py-2 mt-2 rounded-lg text-xs font-bold" style={{ background: "rgba(255,255,255,0.06)", color: "#888" }}>View full profile →</button>
-        </div>
-      );
-    }
-
-    // RECENT FORM
-    if (sr.type === "recent" && !boxLoading && enrichedBox.length > 0) {
-      const recent = enrichedBox.slice(0, sr.lastN);
-      const avg = (key) => recent.length > 0 ? recent.reduce((s, g) => s + (Number(g[key]) || 0), 0) / recent.length : 0;
-
-      return (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(233,69,96,0.04)", border: "1px solid rgba(233,69,96,0.1)" }}>
-          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "#e94560" }}>Last {recent.length} games</div>
-          <div className="flex items-center gap-3 mb-3">
-            {sr.player.headshot_url && <img src={sr.player.headshot_url} alt="" className="w-10 h-10 rounded-full" />}
-            <div><div className="text-sm font-bold text-white">{sr.player.name}</div><div className="text-xs" style={{ color: "#888" }}>{(teamMap[sr.player.team_id] || {}).full_name}</div></div>
-          </div>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
-            {[["PTS", "points"], ["REB", "rebounds"], ["AST", "assists"], ["STL", "steals"], ["BLK", "blocks"], ["MIN", "minutes"]].map(([label, key]) => (
-              <div key={label} className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>{label}</div><div className="text-sm font-bold text-white">{avg(key).toFixed(1)}</div></div>
-            ))}
-          </div>
-          <button onClick={() => { onSelectPlayer(sr.player); onClose(); }} className="w-full py-2 rounded-lg text-xs font-bold" style={{ background: "rgba(255,255,255,0.06)", color: "#888" }}>View full game log →</button>
-        </div>
-      );
-    }
-
-    // TEAM FORM
-    if (sr.type === "team_form" && !boxLoading && boxData && boxData.length > 0) {
-      let filtered = boxData;
-      if (sr.home) filtered = filtered.filter((g) => g.home_team_id === sr.team.id);
-      if (sr.away) filtered = filtered.filter((g) => g.away_team_id === sr.team.id);
-      const recent = filtered.slice(0, sr.lastN);
-      const wins = recent.filter((g) => {
-        const isHome = g.home_team_id === sr.team.id;
-        return isHome ? g.home_score > g.away_score : g.away_score > g.home_score;
-      }).length;
-
-      return (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(74,144,217,0.06)", border: "1px solid rgba(74,144,217,0.15)" }}>
-          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "#4a90d9" }}>
-            {sr.team.full_name} · Last {recent.length}{sr.home ? " home" : sr.away ? " away" : ""}
-          </div>
-          <div className="flex items-center gap-3 mb-3">
-            {sr.team.logo_url && <img src={sr.team.logo_url} alt="" className="w-10 h-10" />}
-            <div className="text-2xl font-black text-white">{wins}-{recent.length - wins}</div>
-            <div className="text-sm" style={{ color: wins > recent.length - wins ? "#52b788" : "#ff6b6b" }}>{((wins / (recent.length || 1)) * 100).toFixed(0)}% win rate</div>
-          </div>
-          {recent.map((g, i) => {
-            const isHome = g.home_team_id === sr.team.id;
-            const opp = teamMap[isHome ? g.away_team_id : g.home_team_id] || {};
-            const tScore = isHome ? g.home_score : g.away_score;
-            const oScore = isHome ? g.away_score : g.home_score;
-            const won = tScore > oScore;
-            return (
-              <div key={g.id} className="flex items-center gap-2 py-1.5" style={{ borderTop: "1px solid rgba(255,255,255,0.03)" }}>
-                <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: won ? "rgba(82,183,136,0.12)" : "rgba(255,107,107,0.12)", color: won ? "#52b788" : "#ff6b6b", fontSize: "9px" }}>{won ? "W" : "L"}</span>
-                {opp.logo_url && <img src={opp.logo_url} alt="" className="w-4 h-4" />}
-                <span className="text-xs text-white flex-1">{isHome ? "vs" : "@"} {opp.abbreviation}</span>
-                <span className="text-xs font-bold tabular-nums" style={{ color: won ? "#52b788" : "#ff6b6b" }}>{tScore}-{oScore}</span>
-              </div>
-            );
-          })}
-          <button onClick={() => { onSelectTeam(sr.team.id); onClose(); }} className="w-full py-2 mt-2 rounded-lg text-xs font-bold" style={{ background: "rgba(255,255,255,0.06)", color: "#888" }}>View team page →</button>
-        </div>
-      );
-    }
-
-    // LEADERBOARD FILTER
-    if (sr.type === "leaderboard") {
-      const filtered = enrichedStats.filter((p) => {
-        const val = Number(p[sr.stat]) || 0;
-        return sr.direction === "under" ? val < sr.threshold : val >= sr.threshold;
-      }).sort((a, b) => (Number(b[sr.stat]) || 0) - (Number(a[sr.stat]) || 0)).slice(0, 20);
-
-      const statLabel = Object.entries(SEASON_STAT_KEYS).find(([, v]) => v === sr.stat)?.[0]?.toUpperCase() || sr.stat;
-
-      return (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(255,209,102,0.06)", border: "1px solid rgba(255,209,102,0.15)" }}>
-          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "#ffd166" }}>
-            Players averaging {sr.direction === "under" ? "under" : ""} {sr.threshold}+ {statLabel}
-          </div>
-          <div className="text-xs mb-3" style={{ color: "#555" }}>{filtered.length} players</div>
-          {filtered.map((p, i) => {
-            const team = teamMap[p.team_id] || {};
-            return (
-              <div key={p.id || i} className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-white/5 rounded px-1 transition-colors" onClick={() => { onSelectPlayer(p); onClose(); }} style={{ borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
-                <span className="text-xs font-bold w-5 text-center" style={{ color: i < 3 ? "#ffd166" : "#555" }}>{i + 1}</span>
-                {p.headshot_url && <img src={p.headshot_url} alt="" className="w-6 h-6 rounded-full" />}
-                <span className="text-sm font-semibold text-white flex-1 truncate">{p.name}</span>
-                <span className="text-xs" style={{ color: "#555" }}>{team.abbreviation}</span>
-                <span className="text-sm font-bold" style={{ color: "#ffd166" }}>{fmt(p[sr.stat])}</span>
-              </div>
-            );
-          })}
-        </div>
-      );
-    }
-
-    // PLAYER (simple)
-    if (sr.type === "player") {
-      const team = teamMap[sr.player.team_id] || {};
-      return (
-        <div className="rounded-xl p-4 mb-3 cursor-pointer hover:bg-white/5 transition-colors" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }} onClick={() => { onSelectPlayer(sr.player); onClose(); }}>
-          <div className="flex items-center gap-3">
-            {sr.player.headshot_url && <img src={sr.player.headshot_url} alt="" className="w-12 h-12 rounded-full" />}
-            <div className="flex-1">
-              <div className="text-base font-bold text-white">{sr.player.name}</div>
-              <div className="flex items-center gap-1.5">
-                {team.logo_url && <img src={team.logo_url} alt="" className="w-3.5 h-3.5" />}
-                <span className="text-xs" style={{ color: "#555" }}>{team.full_name} · {sr.player.position}</span>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>PTS</div><div className="text-sm font-bold text-white">{fmt(sr.player.points_per_game)}</div></div>
-              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>REB</div><div className="text-sm font-bold" style={{ color: "#aaa" }}>{fmt(sr.player.rebounds_per_game)}</div></div>
-              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>AST</div><div className="text-sm font-bold" style={{ color: "#aaa" }}>{fmt(sr.player.assists_per_game)}</div></div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // TEAM (simple)
-    if (sr.type === "team") {
-      const standing = standings.find((s) => s.team_id === sr.team.id);
-      return (
-        <div className="rounded-xl p-4 mb-3 cursor-pointer hover:bg-white/5 transition-colors" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }} onClick={() => { onSelectTeam(sr.team.id); onClose(); }}>
-          <div className="flex items-center gap-3">
-            {sr.team.logo_url && <img src={sr.team.logo_url} alt="" className="w-10 h-10" />}
-            <div className="flex-1">
-              <div className="text-base font-bold text-white">{sr.team.full_name}</div>
-              <div className="text-xs" style={{ color: "#555" }}>{sr.team.conference} · {sr.team.division}</div>
-            </div>
-            {standing && <div className="text-right"><div className="text-lg font-bold text-white">{standing.wins}-{standing.losses}</div><div style={{ fontSize: "10px", color: "#555" }}>#{standing.conference_rank}</div></div>}
-          </div>
-        </div>
-      );
-    }
-
-    // Loading state for box score queries
-    if (boxLoading) {
-      return <div className="py-6 text-center"><div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} /><p className="text-xs" style={{ color: "#555" }}>Crunching the numbers...</p></div>;
-    }
-
-    return null;
-  };
-
-  const showFallback = !smartResult && fallbackResults.players.length + fallbackResults.teams.length > 0;
+  const hasResults = results.players.length > 0 || results.teams.length > 0;
 
   return (
     <div className="fixed inset-0 z-[100]" onClick={onClose}>
@@ -770,63 +242,50 @@ function SmartSearch({ playerStats, enrichedStats, teamMap, standings, games, al
       <div className="relative max-w-lg mx-auto px-4 pt-4 pb-4 overflow-y-auto" style={{ maxHeight: "100vh" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-3">
           <div className="flex-1 relative">
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Try 'Tatum over 25 last 10' or 'Luka vs Bucks'..."
-              className="w-full p-3 pl-10 rounded-xl text-white placeholder-gray-500 outline-none"
-              style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", fontSize: "16px" }}
-            />
+            <input ref={inputRef} type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search players or teams..." className="w-full p-3 pl-10 rounded-xl text-white placeholder-gray-500 outline-none" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", fontSize: "16px" }} />
             <svg className="absolute left-3 top-1/2 -translate-y-1/2" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           </div>
           <button onClick={onClose} className="px-3 py-3 rounded-xl text-sm font-semibold" style={{ color: "#888" }}>Cancel</button>
         </div>
 
-        {/* Hints when empty */}
-        {query.length < 2 && (
-          <div className="py-4">
-            <div className="text-xs font-bold uppercase tracking-wider mb-3 px-1" style={{ color: "#555" }}>Try searching</div>
-            {["Tatum over 25 last 10", "Luka vs Bucks", "Jokic last 5 games", "Lakers last 5 home", "Who averages 30+ points", "LeBron vs Curry"].map((hint) => (
-              <button key={hint} onClick={() => setQuery(hint)} className="block w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-white/5 transition-colors mb-0.5" style={{ color: "#888" }}>
-                <span style={{ color: "#e94560", marginRight: "8px" }}>→</span>{hint}
-              </button>
-            ))}
-          </div>
-        )}
+        {query.length >= 2 && !hasResults && <p className="text-sm text-center py-8" style={{ color: "#555" }}>No results for "{query}"</p>}
 
-        {/* Smart answer */}
-        {query.length >= 2 && renderSmartAnswer()}
-
-        {/* Fallback normal search */}
-        {showFallback && (
-          <>
-            {fallbackResults.teams.map((t) => {
+        {results.teams.length > 0 && (
+          <div className="mb-3">
+            <div className="text-xs font-bold uppercase tracking-wider px-1 mb-2" style={{ color: "#e94560" }}>Teams</div>
+            {results.teams.map((t) => {
               const standing = standings.find((s) => s.team_id === t.id);
               return (
                 <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-white/5 mb-1 transition-colors" style={{ background: "rgba(255,255,255,0.03)" }} onClick={() => { onSelectTeam(t.id); onClose(); }}>
                   {t.logo_url && <img src={t.logo_url} alt="" className="w-8 h-8 flex-shrink-0" />}
-                  <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white truncate">{t.full_name}</div></div>
-                  {standing && <span className="text-sm font-bold text-white">{standing.wins}-{standing.losses}</span>}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold text-white truncate">{t.full_name}</div>
+                    <div className="text-xs" style={{ color: "#555" }}>{t.conference} · {t.division}</div>
+                  </div>
+                  {standing && <div className="text-right flex-shrink-0"><div className="text-sm font-bold text-white">{standing.wins}-{standing.losses}</div><div style={{ fontSize: "10px", color: "#555" }}>#{standing.conference_rank}</div></div>}
                 </div>
               );
             })}
-            {fallbackResults.players.map((s, i) => {
+          </div>
+        )}
+
+        {results.players.length > 0 && (
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wider px-1 mb-2" style={{ color: "#e94560" }}>Players</div>
+            {results.players.map((s, i) => {
               const team = teamMap[s.team_id] || {};
               return (
                 <div key={s.id || i} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-white/5 mb-1 transition-colors" style={{ background: "rgba(255,255,255,0.03)" }} onClick={() => { onSelectPlayer(s); onClose(); }}>
                   {s.headshot_url && <img src={s.headshot_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />}
-                  <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white truncate">{s.name}</div><span style={{ fontSize: "11px", color: "#555" }}>{team.abbreviation} · {s.position}</span></div>
-                  <span className="text-sm font-bold text-white">{fmt(s.points_per_game)}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold text-white truncate">{s.name}</div>
+                    <div className="flex items-center gap-1.5">{team.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3" />}<span style={{ fontSize: "11px", color: "#555" }}>{team.abbreviation} · {s.position}</span></div>
+                  </div>
+                  <div className="text-right flex-shrink-0"><div className="text-base font-bold text-white">{fmt(s.points_per_game)}</div><div style={{ fontSize: "10px", color: "#555" }}>PPG</div></div>
                 </div>
               );
             })}
-          </>
-        )}
-
-        {query.length >= 2 && !smartResult && !showFallback && !boxLoading && (
-          <p className="text-sm text-center py-8" style={{ color: "#555" }}>No results for "{query}"</p>
+          </div>
         )}
       </div>
     </div>
@@ -1363,8 +822,9 @@ function PlayersView({ playerStats, teamMap, onSelectPlayer }) {
   );
 }
 
-/* ── Recent Form / Game Log component ── */
-function PlayerGameLog({ playerId, teamMap }) {
+
+/* ── Player Game Log (data hook) ── */
+function usePlayerGameLog(playerId, teamMap) {
   const [logs, setLogs] = useState(null);
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState("L5");
@@ -1374,55 +834,38 @@ function PlayerGameLog({ playerId, teamMap }) {
     (async () => {
       try {
         setLoading(true);
-        // Fetch box scores for this player
         const boxData = await supaFetch("nba_box_scores", `select=*&player_id=eq.${playerId}&limit=50`);
         if (!boxData || boxData.length === 0) { setLogs([]); return; }
-
-        // Get unique game IDs and fetch those games for date/opponent info
         const gameIds = [...new Set(boxData.map((b) => b.game_id))];
         const gamesData = await supaFetch("games", `select=*&id=in.(${gameIds.join(",")})`);
-        const fetchedGameMap = {};
-        (gamesData || []).forEach((g) => (fetchedGameMap[g.id] = g));
-
-        // Attach game info to each box score
-        const enrichedLogs = boxData.map((b) => ({ ...b, _game: fetchedGameMap[b.game_id] }));
-        setLogs(enrichedLogs);
-      } catch (e) {
-        console.error("Failed to load game logs:", e);
-        setLogs([]);
-      } finally {
-        setLoading(false);
-      }
+        const gm = {};
+        (gamesData || []).forEach((g) => (gm[g.id] = g));
+        setLogs(boxData.map((b) => ({ ...b, _game: gm[b.game_id] })));
+      } catch (e) { console.error(e); setLogs([]); }
+      finally { setLoading(false); }
     })();
   }, [playerId]);
 
-  if (loading) return <div className="py-4 text-center"><div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} /></div>;
-  if (!logs || logs.length === 0) return <div className="py-4 text-center text-xs" style={{ color: "#555" }}>No game log data available for this player</div>;
+  const enriched = useMemo(() => {
+    if (!logs) return [];
+    return logs.map((log) => {
+      const game = log._game || {};
+      const isHome = log.team_id === game.home_team_id;
+      const oppId = isHome ? game.away_team_id : game.home_team_id;
+      return { ...log, opp: teamMap[oppId] || {}, oppId, isHome, won: isHome ? game.home_score > game.away_score : game.away_score > game.home_score, gameDate: game.game_date };
+    }).filter((l) => l.gameDate).sort((a, b) => b.gameDate.localeCompare(a.gameDate));
+  }, [logs, teamMap]);
 
-  // Enrich logs with opponent info
-  const enriched = logs.map((log) => {
-    const game = log._game || {};
-    const isHome = log.team_id === game.home_team_id;
-    const oppId = isHome ? game.away_team_id : game.home_team_id;
-    const opp = teamMap[oppId] || {};
-    const teamScore = isHome ? game.home_score : game.away_score;
-    const oppScore = isHome ? game.away_score : game.home_score;
-    const won = teamScore > oppScore;
-    return { ...log, opp, oppId, isHome, teamScore, oppScore, won, gameDate: game.game_date };
-  }).filter((l) => l.gameDate).sort((a, b) => b.gameDate.localeCompare(a.gameDate));
+  const opponents = useMemo(() => {
+    const map = {};
+    enriched.forEach((l) => { if (l.oppId && l.opp.abbreviation) map[l.oppId] = l.opp; });
+    return map;
+  }, [enriched]);
 
-  // Get unique opponents for filter
-  const opponents = {};
-  enriched.forEach((l) => { if (l.oppId && l.opp.abbreviation) opponents[l.oppId] = l.opp; });
-
-  // Apply matchup filter
   const filtered = matchupFilter ? enriched.filter((l) => l.oppId === matchupFilter) : enriched;
-
-  // Range slicing
   const rangeMap = { L5: 5, L10: 10, L15: 15, ALL: 999 };
   const sliced = filtered.slice(0, rangeMap[range] || 5);
 
-  // Calculate averages
   const avg = (arr, key) => arr.length ? arr.reduce((s, g) => s + (Number(g[key]) || 0), 0) / arr.length : 0;
   const avgStats = sliced.length > 0 ? {
     pts: avg(sliced, "points"), reb: avg(sliced, "rebounds"), ast: avg(sliced, "assists"),
@@ -1431,11 +874,18 @@ function PlayerGameLog({ playerId, teamMap }) {
     fg3m: avg(sliced, "fg3_made"), fg3a: avg(sliced, "fg3_attempted"),
   } : null;
 
-  const matchupOpp = matchupFilter ? teamMap[matchupFilter] : null;
+  return { loading, enriched, sliced, avgStats, opponents, range, setRange, matchupFilter, setMatchupFilter, matchupOpp: matchupFilter ? teamMap[matchupFilter] : null };
+}
+
+/* ── Game Log UI ── */
+function PlayerGameLogUI({ playerId, teamMap }) {
+  const { loading, sliced, avgStats, opponents, range, setRange, matchupFilter, setMatchupFilter, matchupOpp } = usePlayerGameLog(playerId, teamMap);
+
+  if (loading) return <div className="py-4 text-center"><div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} /></div>;
+  if (sliced.length === 0 && !matchupFilter) return <div className="py-4 text-center text-xs" style={{ color: "#555" }}>No game log data — run <code className="px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)" }}>python sync_nba.py boxscores</code></div>;
 
   return (
     <div>
-      {/* Range toggle + matchup filter */}
       <div className="flex flex-wrap items-center gap-1.5 mb-3">
         {["L5", "L10", "L15", "ALL"].map((r) => (
           <button key={r} onClick={() => setRange(r)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all" style={{
@@ -1445,68 +895,46 @@ function PlayerGameLog({ playerId, teamMap }) {
           }}>{r === "ALL" ? "All" : r}</button>
         ))}
         <div style={{ width: "1px", background: "rgba(255,255,255,0.08)", margin: "0 2px", alignSelf: "stretch", minHeight: "20px" }} />
-        <button onClick={() => setMatchupFilter(null)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all" style={{
-          background: !matchupFilter ? "rgba(74,144,217,0.15)" : "rgba(255,255,255,0.04)",
-          color: !matchupFilter ? "#4a90d9" : "#666",
-        }}>All teams</button>
+        <button onClick={() => setMatchupFilter(null)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all" style={{ background: !matchupFilter ? "rgba(74,144,217,0.15)" : "rgba(255,255,255,0.04)", color: !matchupFilter ? "#4a90d9" : "#666" }}>All</button>
         {Object.entries(opponents).slice(0, 6).map(([id, opp]) => (
           <button key={id} onClick={() => setMatchupFilter(matchupFilter === id ? null : id)} className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold transition-all" style={{
             background: matchupFilter === id ? "rgba(74,144,217,0.15)" : "rgba(255,255,255,0.04)",
             color: matchupFilter === id ? "#4a90d9" : "#666",
-          }}>
-            {opp.logo_url && <img src={opp.logo_url} alt="" className="w-3 h-3" />}
-            {opp.abbreviation}
-          </button>
+          }}>{opp.logo_url && <img src={opp.logo_url} alt="" className="w-3 h-3" />}{opp.abbreviation}</button>
         ))}
       </div>
 
-      {/* Averages bar */}
       {avgStats && (
         <div className="rounded-xl p-3 mb-3" style={{ background: matchupFilter ? "rgba(74,144,217,0.06)" : "rgba(233,69,96,0.04)", border: `1px solid ${matchupFilter ? "rgba(74,144,217,0.15)" : "rgba(233,69,96,0.1)"}` }}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold" style={{ color: matchupFilter ? "#4a90d9" : "#e94560" }}>
-              {matchupFilter ? `vs ${matchupOpp?.abbreviation || "?"} avg` : `${range === "ALL" ? "Season" : range} averages`}
-            </span>
+            <span className="text-xs font-bold" style={{ color: matchupFilter ? "#4a90d9" : "#e94560" }}>{matchupFilter ? `vs ${matchupOpp?.abbreviation || "?"} avg` : `${range === "ALL" ? "Season" : range} averages`}</span>
             <span className="text-xs" style={{ color: "#555" }}>{sliced.length} games</span>
           </div>
           <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>PTS</div><div className="text-base font-bold text-white">{avgStats.pts.toFixed(1)}</div></div>
-            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>REB</div><div className="text-base font-bold text-white">{avgStats.reb.toFixed(1)}</div></div>
-            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>AST</div><div className="text-base font-bold text-white">{avgStats.ast.toFixed(1)}</div></div>
-            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>STL</div><div className="text-sm font-semibold" style={{ color: "#aaa" }}>{avgStats.stl.toFixed(1)}</div></div>
-            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>BLK</div><div className="text-sm font-semibold" style={{ color: "#aaa" }}>{avgStats.blk.toFixed(1)}</div></div>
-            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>MIN</div><div className="text-sm font-semibold" style={{ color: "#aaa" }}>{avgStats.min.toFixed(0)}</div></div>
+            {[["PTS", avgStats.pts, true], ["REB", avgStats.reb, true], ["AST", avgStats.ast, true], ["STL", avgStats.stl], ["BLK", avgStats.blk], ["MIN", avgStats.min]].map(([l, v, big]) => (
+              <div key={l} className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>{l}</div><div className={`font-bold ${big ? "text-base text-white" : "text-sm"}`} style={big ? {} : { color: "#aaa" }}>{v.toFixed(l === "MIN" ? 0 : 1)}</div></div>
+            ))}
           </div>
           {avgStats.fga > 0 && (
             <div className="grid grid-cols-3 gap-2 mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
               <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>FG</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{avgStats.fgm.toFixed(1)}/{avgStats.fga.toFixed(1)}</div></div>
               <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>3PT</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{avgStats.fg3m.toFixed(1)}/{avgStats.fg3a.toFixed(1)}</div></div>
-              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>FG%</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{avgStats.fga > 0 ? ((avgStats.fgm / avgStats.fga) * 100).toFixed(1) : "—"}%</div></div>
+              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>FG%</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{((avgStats.fgm / avgStats.fga) * 100).toFixed(1)}%</div></div>
             </div>
           )}
         </div>
       )}
 
-      {/* Game-by-game log */}
       <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
-        {/* Header */}
         <div className="px-2 py-1.5 grid items-center" style={{ gridTemplateColumns: "60px 1fr 32px 32px 32px 32px 32px 32px", fontSize: "9px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
           <span>Date</span><span>OPP</span><span className="text-center">PTS</span><span className="text-center">REB</span><span className="text-center">AST</span>
           <span className="text-center hidden sm:block">STL</span><span className="text-center hidden sm:block">BLK</span><span className="text-center">MIN</span>
         </div>
         {sliced.map((g, i) => (
-          <div key={g.id} className="px-2 py-1.5 grid items-center" style={{
-            gridTemplateColumns: "60px 1fr 32px 32px 32px 32px 32px 32px",
-            borderBottom: "1px solid rgba(255,255,255,0.02)",
-            background: i % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent",
-          }}>
+          <div key={g.id} className="px-2 py-1.5 grid items-center" style={{ gridTemplateColumns: "60px 1fr 32px 32px 32px 32px 32px 32px", borderBottom: "1px solid rgba(255,255,255,0.02)", background: i % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent" }}>
             <span style={{ fontSize: "10px", color: "#555" }}>{g.gameDate ? new Date(g.gameDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}</span>
             <div className="flex items-center gap-1.5 min-w-0">
-              <span className="text-xs font-bold px-1 py-0.5 rounded" style={{
-                background: g.won ? "rgba(82,183,136,0.12)" : "rgba(255,107,107,0.12)",
-                color: g.won ? "#52b788" : "#ff6b6b",
-                fontSize: "9px",
-              }}>{g.won ? "W" : "L"}</span>
+              <span className="text-xs font-bold px-1 py-0.5 rounded" style={{ background: g.won ? "rgba(82,183,136,0.12)" : "rgba(255,107,107,0.12)", color: g.won ? "#52b788" : "#ff6b6b", fontSize: "9px" }}>{g.won ? "W" : "L"}</span>
               {g.opp.logo_url && <img src={g.opp.logo_url} alt="" className="w-3.5 h-3.5" />}
               <span className="text-xs truncate" style={{ color: "#888" }}>{g.isHome ? "vs" : "@"} {g.opp.abbreviation}</span>
             </div>
@@ -1524,17 +952,101 @@ function PlayerGameLog({ playerId, teamMap }) {
   );
 }
 
-/* ── Player Detail ── */
+/* ── Line Check Tool ── */
+function LineCheck({ playerId, teamMap }) {
+  const [stat, setStat] = useState("points");
+  const [threshold, setThreshold] = useState("");
+  const [direction, setDirection] = useState("over");
+  const [range, setRange] = useState(10);
+  const { loading, enriched } = usePlayerGameLog(playerId, teamMap);
+  const cardRef = useRef(null);
+  const { sharing, share } = useShareImage();
+
+  if (loading) return null;
+  if (!enriched || enriched.length === 0) return null;
+
+  const statOptions = [
+    { key: "points", label: "Points" }, { key: "rebounds", label: "Rebounds" }, { key: "assists", label: "Assists" },
+    { key: "steals", label: "Steals" }, { key: "blocks", label: "Blocks" }, { key: "fg3_made", label: "3-Pointers" },
+  ];
+
+  const threshNum = Number(threshold);
+  const recent = enriched.slice(0, range);
+  const hasThreshold = threshold !== "" && !isNaN(threshNum);
+  const hits = hasThreshold ? recent.filter((g) => direction === "over" ? (Number(g[stat]) || 0) >= threshNum : (Number(g[stat]) || 0) < threshNum) : [];
+  const hitPct = hasThreshold && recent.length > 0 ? (hits.length / recent.length * 100) : 0;
+
+  return (
+    <div>
+      <div className="rounded-xl p-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {statOptions.map((s) => (
+            <button key={s.key} onClick={() => setStat(s.key)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all" style={{
+              background: stat === s.key ? "rgba(82,183,136,0.15)" : "rgba(255,255,255,0.04)",
+              color: stat === s.key ? "#52b788" : "#666",
+            }}>{s.label}</button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
+            <button onClick={() => setDirection("over")} className="px-3 py-1.5 text-xs font-bold" style={{ background: direction === "over" ? "rgba(82,183,136,0.2)" : "transparent", color: direction === "over" ? "#52b788" : "#666" }}>Over</button>
+            <button onClick={() => setDirection("under")} className="px-3 py-1.5 text-xs font-bold" style={{ background: direction === "under" ? "rgba(255,107,107,0.2)" : "transparent", color: direction === "under" ? "#ff6b6b" : "#666" }}>Under</button>
+          </div>
+          <input type="number" inputMode="decimal" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="Line" className="p-1.5 rounded-lg text-white text-sm text-center outline-none" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", width: "72px", fontSize: "16px" }} />
+          <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
+            {[5, 10, 15, 20].map((n) => (
+              <button key={n} onClick={() => setRange(n)} className="px-2 py-1.5 text-xs font-bold" style={{ background: range === n ? "rgba(233,69,96,0.15)" : "transparent", color: range === n ? "#e94560" : "#666" }}>L{n}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {hasThreshold && (
+        <div ref={cardRef} className="rounded-xl p-4 mb-3" style={{ background: hitPct >= 60 ? "rgba(82,183,136,0.06)" : hitPct >= 40 ? "rgba(255,209,102,0.06)" : "rgba(255,107,107,0.06)", border: `1px solid ${hitPct >= 60 ? "rgba(82,183,136,0.15)" : hitPct >= 40 ? "rgba(255,209,102,0.15)" : "rgba(255,107,107,0.15)"}` }}>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <div className="text-xs font-bold uppercase" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{direction} {threshNum} {statOptions.find((s) => s.key === stat)?.label}</div>
+              <div className="text-xs" style={{ color: "#555" }}>Last {recent.length} games</div>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-black" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{hits.length}/{recent.length}</div>
+              <div className="text-sm font-bold" style={{ color: hitPct >= 60 ? "#52b788" : hitPct >= 40 ? "#ffd166" : "#ff6b6b" }}>{hitPct.toFixed(0)}%</div>
+            </div>
+          </div>
+          <div className="flex gap-1.5 flex-wrap mb-2">
+            {recent.map((g, i) => {
+              const val = Number(g[stat]) || 0;
+              const hit = direction === "over" ? val >= threshNum : val < threshNum;
+              return (
+                <div key={i} className="flex flex-col items-center">
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold" style={{ background: hit ? "rgba(82,183,136,0.2)" : "rgba(255,107,107,0.15)", color: hit ? "#52b788" : "#ff6b6b", fontSize: "10px" }}>{val}</div>
+                  <span style={{ fontSize: "8px", color: "#444", marginTop: "2px" }}>{g.opp?.abbreviation}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span>
+            <ShareButton onClick={() => share(cardRef, `statline-line-check`)} sharing={sharing} label="📤 Share" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Player Detail (the killer page) ── */
 function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
   const team = teamMap[player.team_id] || {};
   const cardRef = useRef(null);
   const { sharing, share } = useShareImage();
+  const pid = player.player_id || player.id;
 
   return (
     <div>
       <button onClick={onBack} className="text-xs font-semibold mb-4 flex items-center gap-1" style={{ color: "#e94560" }}>← Back</button>
 
-      <div ref={cardRef} className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div ref={cardRef} className="rounded-xl p-4 mb-2" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex items-center gap-4">
           {player.headshot_url && <img src={player.headshot_url} alt="" className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover flex-shrink-0" />}
           <div className="flex-1 min-w-0">
@@ -1577,15 +1089,20 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
           <span style={{ fontSize: "10px", color: "#333", fontWeight: 700 }}>STATLINE</span>
         </div>
       </div>
-
       <div className="flex justify-center mb-6">
         <ShareButton onClick={() => share(cardRef, `statline-${player.name?.replace(/\s+/g, "-")}`)} sharing={sharing} label="📤 Share player card" />
       </div>
 
+      {/* Line Check Tool */}
+      <div className="mb-6">
+        <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#52b788" }}>Line check</div>
+        <LineCheck playerId={pid} teamMap={teamMap} />
+      </div>
+
       {/* Recent Form & Game Log */}
       <div className="mb-4">
-        <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent form</div>
-        <PlayerGameLog playerId={player.player_id || player.id} teamMap={teamMap} />
+        <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent form & game log</div>
+        <PlayerGameLogUI playerId={pid} teamMap={teamMap} />
       </div>
     </div>
   );
@@ -1897,22 +1414,14 @@ export default function App() {
         </div>
       </div>
 
-      {/* Smart Search Overlay */}
+      {/* Search Overlay */}
       {searchOpen && (
-        <SmartSearch
+        <SimpleSearch
           playerStats={data.playerStats}
-          enrichedStats={data.enrichedStats}
           teamMap={data.teamMap}
           standings={data.standings}
-          games={data.games}
-          allGames={data.allGames}
           onSelectPlayer={handleSelectPlayer}
           onSelectTeam={handleSelectTeam}
-          onNavigateCompare={(p1, p2) => {
-            const url = window.location.pathname + "?compare=" + encodeURIComponent(p1.name) + "," + encodeURIComponent(p2.name);
-            window.history.replaceState(null, "", url);
-            setTab("Compare");
-          }}
           onClose={() => setSearchOpen(false)}
         />
       )}
