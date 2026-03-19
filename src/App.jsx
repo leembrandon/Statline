@@ -845,8 +845,158 @@ function PlayersView({ playerStats, teamMap, onSelectPlayer }) {
   );
 }
 
+/* ── Recent Form / Game Log component ── */
+function PlayerGameLog({ playerId, teamMap, games }) {
+  const [logs, setLogs] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState("L5");
+  const [matchupFilter, setMatchupFilter] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        const data = await supaFetch("nba_box_scores", `select=*,game:game_id(game_date,home_team_id,away_team_id,home_score,away_score,status)&player_id=eq.${playerId}&order=game->>game_date.desc&limit=30`);
+        setLogs(data || []);
+      } catch (e) {
+        console.error("Failed to load game logs:", e);
+        setLogs([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [playerId]);
+
+  if (loading) return <div className="py-4 text-center"><div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} /></div>;
+  if (!logs || logs.length === 0) return <div className="py-4 text-center text-xs" style={{ color: "#555" }}>No game logs available yet — run <code className="px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)" }}>python sync_nba.py boxscores</code></div>;
+
+  // Enrich logs with opponent info
+  const enriched = logs.map((log) => {
+    const game = log.game || {};
+    const isHome = log.team_id === game.home_team_id;
+    const oppId = isHome ? game.away_team_id : game.home_team_id;
+    const opp = teamMap[oppId] || {};
+    const teamScore = isHome ? game.home_score : game.away_score;
+    const oppScore = isHome ? game.away_score : game.home_score;
+    const won = teamScore > oppScore;
+    return { ...log, opp, oppId, isHome, teamScore, oppScore, won, gameDate: game.game_date };
+  }).filter((l) => l.gameDate);
+
+  // Get unique opponents for filter
+  const opponents = {};
+  enriched.forEach((l) => { if (l.oppId && l.opp.abbreviation) opponents[l.oppId] = l.opp; });
+
+  // Apply matchup filter
+  const filtered = matchupFilter ? enriched.filter((l) => l.oppId === matchupFilter) : enriched;
+
+  // Range slicing
+  const rangeMap = { L5: 5, L10: 10, L15: 15, ALL: 999 };
+  const sliced = filtered.slice(0, rangeMap[range] || 5);
+
+  // Calculate averages
+  const avg = (arr, key) => arr.length ? arr.reduce((s, g) => s + (Number(g[key]) || 0), 0) / arr.length : 0;
+  const avgStats = sliced.length > 0 ? {
+    pts: avg(sliced, "points"), reb: avg(sliced, "rebounds"), ast: avg(sliced, "assists"),
+    stl: avg(sliced, "steals"), blk: avg(sliced, "blocks"), to: avg(sliced, "turnovers"),
+    min: avg(sliced, "minutes"), fgm: avg(sliced, "fg_made"), fga: avg(sliced, "fg_attempted"),
+    fg3m: avg(sliced, "fg3_made"), fg3a: avg(sliced, "fg3_attempted"),
+  } : null;
+
+  const matchupOpp = matchupFilter ? teamMap[matchupFilter] : null;
+
+  return (
+    <div>
+      {/* Range toggle + matchup filter */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-3">
+        {["L5", "L10", "L15", "ALL"].map((r) => (
+          <button key={r} onClick={() => setRange(r)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all" style={{
+            background: range === r ? "rgba(233,69,96,0.15)" : "rgba(255,255,255,0.04)",
+            color: range === r ? "#e94560" : "#666",
+            border: range === r ? "1px solid rgba(233,69,96,0.3)" : "1px solid transparent",
+          }}>{r === "ALL" ? "All" : r}</button>
+        ))}
+        <div style={{ width: "1px", background: "rgba(255,255,255,0.08)", margin: "0 2px", alignSelf: "stretch", minHeight: "20px" }} />
+        <button onClick={() => setMatchupFilter(null)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all" style={{
+          background: !matchupFilter ? "rgba(74,144,217,0.15)" : "rgba(255,255,255,0.04)",
+          color: !matchupFilter ? "#4a90d9" : "#666",
+        }}>All teams</button>
+        {Object.entries(opponents).slice(0, 6).map(([id, opp]) => (
+          <button key={id} onClick={() => setMatchupFilter(matchupFilter === id ? null : id)} className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold transition-all" style={{
+            background: matchupFilter === id ? "rgba(74,144,217,0.15)" : "rgba(255,255,255,0.04)",
+            color: matchupFilter === id ? "#4a90d9" : "#666",
+          }}>
+            {opp.logo_url && <img src={opp.logo_url} alt="" className="w-3 h-3" />}
+            {opp.abbreviation}
+          </button>
+        ))}
+      </div>
+
+      {/* Averages bar */}
+      {avgStats && (
+        <div className="rounded-xl p-3 mb-3" style={{ background: matchupFilter ? "rgba(74,144,217,0.06)" : "rgba(233,69,96,0.04)", border: `1px solid ${matchupFilter ? "rgba(74,144,217,0.15)" : "rgba(233,69,96,0.1)"}` }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold" style={{ color: matchupFilter ? "#4a90d9" : "#e94560" }}>
+              {matchupFilter ? `vs ${matchupOpp?.abbreviation || "?"} avg` : `${range === "ALL" ? "Season" : range} averages`}
+            </span>
+            <span className="text-xs" style={{ color: "#555" }}>{sliced.length} games</span>
+          </div>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>PTS</div><div className="text-base font-bold text-white">{avgStats.pts.toFixed(1)}</div></div>
+            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>REB</div><div className="text-base font-bold text-white">{avgStats.reb.toFixed(1)}</div></div>
+            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>AST</div><div className="text-base font-bold text-white">{avgStats.ast.toFixed(1)}</div></div>
+            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>STL</div><div className="text-sm font-semibold" style={{ color: "#aaa" }}>{avgStats.stl.toFixed(1)}</div></div>
+            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>BLK</div><div className="text-sm font-semibold" style={{ color: "#aaa" }}>{avgStats.blk.toFixed(1)}</div></div>
+            <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>MIN</div><div className="text-sm font-semibold" style={{ color: "#aaa" }}>{avgStats.min.toFixed(0)}</div></div>
+          </div>
+          {avgStats.fga > 0 && (
+            <div className="grid grid-cols-3 gap-2 mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>FG</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{avgStats.fgm.toFixed(1)}/{avgStats.fga.toFixed(1)}</div></div>
+              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>3PT</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{avgStats.fg3m.toFixed(1)}/{avgStats.fg3a.toFixed(1)}</div></div>
+              <div className="text-center"><div style={{ fontSize: "9px", color: "#555" }}>FG%</div><div className="text-xs font-semibold" style={{ color: "#aaa" }}>{avgStats.fga > 0 ? ((avgStats.fgm / avgStats.fga) * 100).toFixed(1) : "—"}%</div></div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Game-by-game log */}
+      <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
+        {/* Header */}
+        <div className="px-2 py-1.5 grid items-center" style={{ gridTemplateColumns: "60px 1fr 32px 32px 32px 32px 32px 32px", fontSize: "9px", color: "#555", textTransform: "uppercase", letterSpacing: "0.5px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <span>Date</span><span>OPP</span><span className="text-center">PTS</span><span className="text-center">REB</span><span className="text-center">AST</span>
+          <span className="text-center hidden sm:block">STL</span><span className="text-center hidden sm:block">BLK</span><span className="text-center">MIN</span>
+        </div>
+        {sliced.map((g, i) => (
+          <div key={g.id} className="px-2 py-1.5 grid items-center" style={{
+            gridTemplateColumns: "60px 1fr 32px 32px 32px 32px 32px 32px",
+            borderBottom: "1px solid rgba(255,255,255,0.02)",
+            background: i % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent",
+          }}>
+            <span style={{ fontSize: "10px", color: "#555" }}>{g.gameDate ? new Date(g.gameDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}</span>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-xs font-bold px-1 py-0.5 rounded" style={{
+                background: g.won ? "rgba(82,183,136,0.12)" : "rgba(255,107,107,0.12)",
+                color: g.won ? "#52b788" : "#ff6b6b",
+                fontSize: "9px",
+              }}>{g.won ? "W" : "L"}</span>
+              {g.opp.logo_url && <img src={g.opp.logo_url} alt="" className="w-3.5 h-3.5" />}
+              <span className="text-xs truncate" style={{ color: "#888" }}>{g.isHome ? "vs" : "@"} {g.opp.abbreviation}</span>
+            </div>
+            <span className="text-xs text-center font-bold text-white tabular-nums">{g.points}</span>
+            <span className="text-xs text-center tabular-nums" style={{ color: "#aaa" }}>{g.rebounds}</span>
+            <span className="text-xs text-center tabular-nums" style={{ color: "#aaa" }}>{g.assists}</span>
+            <span className="text-xs text-center tabular-nums hidden sm:block" style={{ color: "#666" }}>{g.steals}</span>
+            <span className="text-xs text-center tabular-nums hidden sm:block" style={{ color: "#666" }}>{g.blocks}</span>
+            <span className="text-xs text-center tabular-nums" style={{ color: "#666" }}>{g.minutes}</span>
+          </div>
+        ))}
+        {sliced.length === 0 && <div className="p-4 text-center text-xs" style={{ color: "#555" }}>{matchupFilter ? `No games vs ${matchupOpp?.abbreviation || "this team"}` : "No games found"}</div>}
+      </div>
+    </div>
+  );
+}
+
 /* ── Player Detail ── */
-function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
+function PlayerDetail({ player, teamMap, games, onBack, onTeamClick }) {
   const team = teamMap[player.team_id] || {};
   const cardRef = useRef(null);
   const { sharing, share } = useShareImage();
@@ -899,8 +1049,14 @@ function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
         </div>
       </div>
 
-      <div className="flex justify-center">
+      <div className="flex justify-center mb-6">
         <ShareButton onClick={() => share(cardRef, `statline-${player.name?.replace(/\s+/g, "-")}`)} sharing={sharing} label="📤 Share player card" />
+      </div>
+
+      {/* Recent Form & Game Log */}
+      <div className="mb-4">
+        <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent form</div>
+        <PlayerGameLog playerId={player.player_id || player.id} teamMap={teamMap} games={games} />
       </div>
     </div>
   );
@@ -1230,7 +1386,7 @@ export default function App() {
         {tab === "Schedule" && <ScheduleView upcomingGames={data.upcomingGames} teamMap={data.teamMap} standingsMap={data.standingsMap} onTeamClick={handleSelectTeam} />}
         {tab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} standings={data.standings} onTeamClick={handleSelectTeam} />}
         {tab === "Players" && <PlayersView playerStats={data.enrichedStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
-        {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} onBack={handleBack} onTeamClick={handleSelectTeam} />}
+        {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} games={data.games} onBack={handleBack} onTeamClick={handleSelectTeam} />}
         {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.enrichedStats} games={data.games} allGames={data.allGames} upcomingGames={data.upcomingGames} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
         {tab === "Compare" && <CompareView playerStats={data.enrichedStats} teamMap={data.teamMap} />}
       </div>
