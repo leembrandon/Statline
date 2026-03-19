@@ -846,7 +846,7 @@ function PlayersView({ playerStats, teamMap, onSelectPlayer }) {
 }
 
 /* ── Recent Form / Game Log component ── */
-function PlayerGameLog({ playerId, teamMap, games }) {
+function PlayerGameLog({ playerId, teamMap }) {
   const [logs, setLogs] = useState(null);
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState("L5");
@@ -856,8 +856,19 @@ function PlayerGameLog({ playerId, teamMap, games }) {
     (async () => {
       try {
         setLoading(true);
-        const data = await supaFetch("nba_box_scores", `select=*,game:game_id(game_date,home_team_id,away_team_id,home_score,away_score,status)&player_id=eq.${playerId}&order=game->>game_date.desc&limit=30`);
-        setLogs(data || []);
+        // Fetch box scores for this player
+        const boxData = await supaFetch("nba_box_scores", `select=*&player_id=eq.${playerId}&limit=50`);
+        if (!boxData || boxData.length === 0) { setLogs([]); return; }
+
+        // Get unique game IDs and fetch those games for date/opponent info
+        const gameIds = [...new Set(boxData.map((b) => b.game_id))];
+        const gamesData = await supaFetch("games", `select=*&id=in.(${gameIds.join(",")})`);
+        const fetchedGameMap = {};
+        (gamesData || []).forEach((g) => (fetchedGameMap[g.id] = g));
+
+        // Attach game info to each box score
+        const enrichedLogs = boxData.map((b) => ({ ...b, _game: fetchedGameMap[b.game_id] }));
+        setLogs(enrichedLogs);
       } catch (e) {
         console.error("Failed to load game logs:", e);
         setLogs([]);
@@ -868,11 +879,11 @@ function PlayerGameLog({ playerId, teamMap, games }) {
   }, [playerId]);
 
   if (loading) return <div className="py-4 text-center"><div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "#e94560", borderTopColor: "transparent" }} /></div>;
-  if (!logs || logs.length === 0) return <div className="py-4 text-center text-xs" style={{ color: "#555" }}>No game logs available yet — run <code className="px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)" }}>python sync_nba.py boxscores</code></div>;
+  if (!logs || logs.length === 0) return <div className="py-4 text-center text-xs" style={{ color: "#555" }}>No game log data available for this player</div>;
 
   // Enrich logs with opponent info
   const enriched = logs.map((log) => {
-    const game = log.game || {};
+    const game = log._game || {};
     const isHome = log.team_id === game.home_team_id;
     const oppId = isHome ? game.away_team_id : game.home_team_id;
     const opp = teamMap[oppId] || {};
@@ -880,7 +891,7 @@ function PlayerGameLog({ playerId, teamMap, games }) {
     const oppScore = isHome ? game.away_score : game.home_score;
     const won = teamScore > oppScore;
     return { ...log, opp, oppId, isHome, teamScore, oppScore, won, gameDate: game.game_date };
-  }).filter((l) => l.gameDate);
+  }).filter((l) => l.gameDate).sort((a, b) => b.gameDate.localeCompare(a.gameDate));
 
   // Get unique opponents for filter
   const opponents = {};
@@ -996,7 +1007,7 @@ function PlayerGameLog({ playerId, teamMap, games }) {
 }
 
 /* ── Player Detail ── */
-function PlayerDetail({ player, teamMap, games, onBack, onTeamClick }) {
+function PlayerDetail({ player, teamMap, onBack, onTeamClick }) {
   const team = teamMap[player.team_id] || {};
   const cardRef = useRef(null);
   const { sharing, share } = useShareImage();
@@ -1056,7 +1067,7 @@ function PlayerDetail({ player, teamMap, games, onBack, onTeamClick }) {
       {/* Recent Form & Game Log */}
       <div className="mb-4">
         <div className="text-xs uppercase tracking-wider font-bold mb-3" style={{ color: "#e94560" }}>Recent form</div>
-        <PlayerGameLog playerId={player.player_id || player.id} teamMap={teamMap} games={games} />
+        <PlayerGameLog playerId={player.player_id || player.id} teamMap={teamMap} />
       </div>
     </div>
   );
@@ -1386,7 +1397,7 @@ export default function App() {
         {tab === "Schedule" && <ScheduleView upcomingGames={data.upcomingGames} teamMap={data.teamMap} standingsMap={data.standingsMap} onTeamClick={handleSelectTeam} />}
         {tab === "Standings" && <StandingsView east={data.east} west={data.west} teamMap={data.teamMap} standings={data.standings} onTeamClick={handleSelectTeam} />}
         {tab === "Players" && <PlayersView playerStats={data.enrichedStats} teamMap={data.teamMap} onSelectPlayer={handleSelectPlayer} />}
-        {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} games={data.games} onBack={handleBack} onTeamClick={handleSelectTeam} />}
+        {tab === "_playerDetail" && selectedPlayer && <PlayerDetail player={selectedPlayer} teamMap={data.teamMap} onBack={handleBack} onTeamClick={handleSelectTeam} />}
         {tab === "_teamPage" && selectedTeamId && <TeamPage teamId={selectedTeamId} teamMap={data.teamMap} standings={data.standings} playerStats={data.enrichedStats} games={data.games} allGames={data.allGames} upcomingGames={data.upcomingGames} teamRosters={data.teamRosters} onBack={handleBack} onSelectPlayer={handleSelectPlayer} onTeamClick={handleSelectTeam} />}
         {tab === "Compare" && <CompareView playerStats={data.enrichedStats} teamMap={data.teamMap} />}
       </div>
